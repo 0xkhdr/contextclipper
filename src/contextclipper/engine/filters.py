@@ -738,10 +738,11 @@ def compress_output(
     deduped = _dedup_consecutive(kept)
 
     if max_tokens is not None and max_tokens > 0:
-        deduped, tt = _adaptive_truncate(deduped, max_tokens)
-        if tt:
+        from .scbm import semantic_compress  # lazy import — avoids circular dep at module load
+        before_len = len(deduped)
+        deduped = semantic_compress(deduped, command, exit_code, max_tokens)
+        if len(deduped) < before_len:
             truncated = True
-            deduped.insert(0, f"[ctxclp: output tail-trimmed to ≤{max_tokens} tokens; earlier lines omitted]")
 
     compressed = "\n".join(deduped)
     is_structured = _detect_structured(compressed)
