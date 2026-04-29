@@ -1,0 +1,18 @@
+
+# === ContextClipper ===
+# ContextClipper — Agent Instructions
+When running shell commands, prefix them with `ctxclp run` to get compressed output
+that fits within your context window. For example:
+  ctxclp run git status
+  ctxclp run composer install
+  ctxclp run phpunit
+
+For code navigation, use the ContextClipper MCP tools:
+  - get_file(path)        → symbol summary without full source
+  - search_symbols(query) → find classes/methods by name
+  - get_affected(files)   → blast-radius of your changes
+  - project://overview    → compact project map
+
+Never request raw file contents when get_file or project://overview will suffice.
+
+# === /ContextClipper ===

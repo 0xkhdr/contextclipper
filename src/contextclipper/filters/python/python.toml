@@ -1,0 +1,44 @@
+[filter]
+name = "python"
+description = "Compress Python tooling output (pytest, ruff, pip)"
+
+[[filter.patterns]]
+match_command = "^(pytest|python -m pytest|ruff|pip\\s+(install|list|show)|uv (add|remove|pip))"
+
+[[filter.command_overrides]]
+match = "^(pytest|python -m pytest)"
+
+  [[filter.command_overrides.rules]]
+  type = "drop_matching"
+  pattern = "^(platform |rootdir:|configfile:|plugins:|collected \\d+ item)"
+
+  [[filter.command_overrides.rules]]
+  # Drop passing test lines (dots, spaces)
+  type = "drop_matching"
+  pattern = "^\\.+ *$"
+
+  [[filter.command_overrides.rules]]
+  type = "keep_matching"
+  pattern = "^(FAILED|ERROR|PASSED|=====|_____)"
+  priority = 10
+
+[[filter.command_overrides]]
+match = "^ruff"
+
+  [[filter.command_overrides.rules]]
+  # Only show actual violations
+  type = "keep_matching"
+  pattern = "^(.*\\.py:\\d+:\\d+:|Found \\d+|All checks)"
+  priority = 10
+
+[[filter.command_overrides]]
+match = "^pip install|^uv add"
+
+  [[filter.command_overrides.rules]]
+  type = "drop_matching"
+  pattern = "^Collecting |^  Downloading |^Installing collected|^  Attempting uninstall"
+
+  [[filter.command_overrides.rules]]
+  type = "keep_matching"
+  pattern = "^(Successfully installed|ERROR:|WARNING:|Requirement already)"
+  priority = 10

@@ -1,0 +1,45 @@
+[filter]
+name = "phpunit"
+description = "Compress PHPUnit test output, keeping only failures and summary"
+
+[[filter.patterns]]
+match_command = "^(php\\s+)?vendor/bin/phpunit|^phpunit"
+
+[[filter.rules]]
+# Drop passing test dots and F markers individual lines
+type = "drop_matching"
+pattern = "^\\.+$"
+
+[[filter.rules]]
+# Drop header/footer decorative lines
+type = "drop_matching"
+pattern = "^PHPUnit \\d+\\.\\d+"
+
+[[filter.rules]]
+type = "drop_matching"
+pattern = "^Runtime:"
+
+[[filter.rules]]
+type = "drop_matching"
+pattern = "^Configuration:"
+
+[[filter.rules]]
+# Drop "OK" summary when all tests pass (no failures)
+type = "drop_matching"
+pattern = "^OK \\(\\d+ test"
+
+[[filter.rules]]
+# Keep FAILURES section and everything after
+type = "keep_section"
+start_pattern = "^FAILURES!"
+end_pattern = "^$"
+
+[[filter.rules]]
+# Always keep the summary line
+type = "keep_matching"
+pattern = "^(Tests:|FAILURES!|Errors:|OK \\()"
+priority = 10
+
+[filter.on_failure]
+# On non-zero exit, always keep full FAILURES block
+preserve_sections = ["FAILURES!", "Errors:"]

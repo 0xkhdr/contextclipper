@@ -1,0 +1,44 @@
+[filter]
+name = "docker"
+description = "Compress Docker command output"
+
+[[filter.patterns]]
+match_command = "^docker\\s+(ps|images|logs|compose|build|pull|push)"
+
+[[filter.command_overrides]]
+match = "^docker (ps|compose ps)"
+
+  [[filter.command_overrides.rules]]
+  # Collapse long container IDs
+  type = "regex_replace"
+  pattern = "([0-9a-f]{12,64})"
+  replacement = "\\1[:12]"
+
+[[filter.command_overrides]]
+match = "^docker (build|pull|push)"
+
+  [[filter.command_overrides.rules]]
+  # Drop layer pull/push progress lines
+  type = "drop_matching"
+  pattern = "^[0-9a-f]+: (Pulling fs layer|Waiting|Download complete|Pull complete|Already exists|Pushing)"
+
+  [[filter.command_overrides.rules]]
+  type = "drop_matching"
+  pattern = "^Digest: sha256:"
+
+  [[filter.command_overrides.rules]]
+  type = "keep_matching"
+  pattern = "^(Status:|Successfully|Step \\d+|ERROR|error)"
+  priority = 10
+
+[[filter.command_overrides]]
+match = "^docker logs"
+
+  [[filter.command_overrides.rules]]
+  # Keep last 50 lines only
+  type = "tail"
+  lines = 50
+
+  [[filter.command_overrides.rules]]
+  type = "drop_matching"
+  pattern = "^\\d{4}-\\d{2}-\\d{2}T.*INFO.*heartbeat"

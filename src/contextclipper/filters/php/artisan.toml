@@ -1,0 +1,31 @@
+[filter]
+name = "artisan"
+description = "Compress Laravel Artisan command output"
+
+[[filter.patterns]]
+match_command = "^php artisan|^artisan"
+
+[[filter.rules]]
+type = "drop_matching"
+pattern = "^\\s*$"
+
+[[filter.rules]]
+# Drop the decorative Laravel banner lines
+type = "drop_matching"
+pattern = "^  __ "
+
+[[filter.rules]]
+type = "drop_matching"
+pattern = "^  / /|^  \\\\|^  |   _"
+
+[[filter.rules]]
+# Keep migration/seeder output lines
+type = "keep_matching"
+pattern = "^(Migrating|Migrated|Rolling back|Rolled back|Seeding|Seeded|ERROR|WARN|INFO|\\[ERROR\\])"
+priority = 10
+
+[[filter.rules]]
+# Collapse "INFO" prefix lines
+type = "prefix_collapse"
+prefix = "INFO"
+max_lines = 5

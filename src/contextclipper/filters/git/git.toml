@@ -1,0 +1,52 @@
+[filter]
+name = "git"
+description = "Compress common git command output"
+
+[[filter.patterns]]
+match_command = "^git\\s+(status|diff|log|add|commit|push|pull|fetch|merge)"
+
+# git status compression
+[[filter.command_overrides]]
+match = "^git status"
+
+  [[filter.command_overrides.rules]]
+  type = "drop_matching"
+  pattern = "^On branch|^Your branch is up to date|^nothing to commit"
+
+  [[filter.command_overrides.rules]]
+  type = "keep_matching"
+  pattern = "^(modified:|deleted:|new file:|renamed:|both modified:|Changes|Untracked|Unmerged)"
+  priority = 10
+
+# git log compression
+[[filter.command_overrides]]
+match = "^git log"
+
+  [[filter.command_overrides.rules]]
+  # Collapse commit hashes to 8 chars
+  type = "regex_replace"
+  pattern = "^commit ([0-9a-f]{40})"
+  replacement = "commit \\1[:8]"
+
+  [[filter.command_overrides.rules]]
+  type = "drop_matching"
+  pattern = "^(Author:|Date:|Merge:)"
+
+  [[filter.command_overrides.rules]]
+  type = "keep_matching"
+  pattern = "^(commit |    \\w)"
+  priority = 10
+
+# git diff compression
+[[filter.command_overrides]]
+match = "^git diff"
+
+  [[filter.command_overrides.rules]]
+  type = "drop_matching"
+  pattern = "^index [0-9a-f]+\\.\\.[0-9a-f]+"
+
+  [[filter.command_overrides.rules]]
+  # Keep context lines and changed lines
+  type = "keep_matching"
+  pattern = "^(@@|\\+|\\-|diff --git|--- |\\+\\+\\+ )"
+  priority = 10

@@ -1,0 +1,42 @@
+[filter]
+name = "composer-install"
+description = "Compress composer install/update output"
+
+[[filter.patterns]]
+# Match the command
+match_command = "^composer\\s+(install|update|require|remove)"
+
+[[filter.rules]]
+# Remove per-package loading lines
+type = "drop_matching"
+pattern = "^  - (Installing|Upgrading|Downgrading|Removing) .+ \\("
+
+[[filter.rules]]
+type = "drop_matching"
+pattern = "^Loading composer repositories"
+
+[[filter.rules]]
+type = "drop_matching"
+pattern = "^Updating dependencies$"
+
+[[filter.rules]]
+type = "drop_matching"
+pattern = "^Lock file operations:"
+
+[[filter.rules]]
+type = "drop_matching"
+pattern = "^Nothing to install"
+
+[[filter.rules]]
+type = "drop_matching"
+pattern = "^Package operations:"
+
+[[filter.rules]]
+# Keep error lines (starts with [ERROR] or Problem)
+type = "keep_matching"
+pattern = "^(\\[ERROR\\]|Problem |Your requirements|  - Root|  - \\w+ \\d)"
+priority = 10
+
+[filter.summary_append]
+# Append a brief summary line if we dropped lines
+template = "[composer] {kept} relevant lines (compressed from {total})"

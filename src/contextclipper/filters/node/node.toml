@@ -1,0 +1,43 @@
+[filter]
+name = "node"
+description = "Compress Node.js tooling output (jest, vitest, eslint, pnpm)"
+
+[[filter.patterns]]
+match_command = "^(jest|npx jest|vitest|eslint|pnpm|npm|yarn)"
+
+[[filter.command_overrides]]
+match = "^(jest|npx jest|vitest)"
+
+  [[filter.command_overrides.rules]]
+  type = "drop_matching"
+  pattern = "^(PASS|✓|●.*✓)"
+
+  [[filter.command_overrides.rules]]
+  type = "keep_matching"
+  pattern = "^(FAIL|✕|×|RUNS|Test Suites:|Tests:|Snapshots:|Time:|●)"
+  priority = 10
+
+[[filter.command_overrides]]
+match = "^eslint"
+
+  [[filter.command_overrides.rules]]
+  type = "drop_matching"
+  pattern = "^\\s*$"
+
+  [[filter.command_overrides.rules]]
+  # Keep only error/warning lines
+  type = "keep_matching"
+  pattern = "^(.*\\.\\w+$|\\s+\\d+:\\d+\\s+(error|warning)|✖|\\d+ (problem|error|warning))"
+  priority = 10
+
+[[filter.command_overrides]]
+match = "^pnpm (install|add|remove)"
+
+  [[filter.command_overrides.rules]]
+  type = "drop_matching"
+  pattern = "^(Packages:|Progress:|Already up to date)"
+
+  [[filter.command_overrides.rules]]
+  type = "keep_matching"
+  pattern = "^(\\+ |\\- |Done|ERR_PNPM|error)"
+  priority = 10
