@@ -16,9 +16,9 @@ match = "^(pytest|python -m pytest|uv run pytest)"
   pattern = "^(platform |rootdir:|configfile:|plugins:|collected \\d+ item|cacheprovider)"
 
   [[filter.command_overrides.rules]]
-  description = "Drop passing test progress dots and blanks"
+  description = "Drop passing test lines (verbose format) and progress dots/blanks"
   type = "drop_matching"
-  pattern = "^\\.+ *$|^s+ *$|^\\s*$"
+  pattern = "\\bPASSED$|^\\.+\\s*$|^\\s*$"
 
   [[filter.command_overrides.rules]]
   description = "Drop warning summary preamble"
@@ -28,7 +28,7 @@ match = "^(pytest|python -m pytest|uv run pytest)"
   [[filter.command_overrides.rules]]
   description = "Keep failure markers, error sections, pass/fail summaries, and short test IDs"
   type = "keep_matching"
-  pattern = "^(FAILED|ERROR|PASSED|=====|_____| FAILED | PASSED | ERROR |short test summary)"
+  pattern = "^(FAILED|ERROR|=====|_____| FAILED | ERROR |short test summary)"
   priority = 10
 
 [filter.command_overrides.on_failure]

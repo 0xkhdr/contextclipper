@@ -48,6 +48,10 @@ except ImportError:
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07")
 BUILTIN_FILTERS_DIR = Path(__file__).parent.parent / "filters"
 
+# When True (the default when tee is active), append the machine-parseable
+# ``[CTXCLP:raw=<uuid>]`` line so agents can regex-parse the output ID.
+_MACHINE_FOOTER_DEFAULT = os.environ.get("CTXCLP_INCLUDE_MACHINE_FOOTER", "1") == "1"
+
 # Patterns that strongly suggest a line is an error/warning — used for safety analysis.
 _ERROR_SIGNALS = re.compile(
     r"\b(error|ERROR|Error|FAIL|failed|FAILED|exception|Exception|traceback|Traceback"
@@ -137,7 +141,7 @@ class CompressionResult:
         return round((1 - self.kept_lines / self.original_lines) * 100, 1)
 
     def metadata_footer(self) -> str:
-        """Return the metadata footer line (never includes newline)."""
+        """Return the human-readable metadata footer line (never includes newline)."""
         parts = [f"{self.kept_lines}/{self.original_lines} lines, -{self.reduction_pct}% tokens"]
         if self.raw_output_id:
             parts.append(f"raw_id={self.raw_output_id}")
@@ -148,12 +152,22 @@ class CompressionResult:
             parts.append(f"filter={self.filter_name}")
         return "[ctxclp: " + " | ".join(parts) + "]"
 
+    def machine_footer_line(self) -> str | None:
+        """Return the machine-parseable footer ``[CTXCLP:raw=<uuid>]``, or None."""
+        if self.raw_output_id:
+            return f"[CTXCLP:raw={self.raw_output_id}]"
+        return None
+
     def __str__(self) -> str:
         # Never append the metadata footer inline for structured (JSON) output
         # so that callers reading stdout as JSON don't see a corrupt trailing line.
         if self.is_structured:
             return self.compressed
-        return self.compressed + "\n" + self.metadata_footer()
+        out = self.compressed + "\n" + self.metadata_footer()
+        mf = self.machine_footer_line()
+        if mf and _MACHINE_FOOTER_DEFAULT:
+            out += "\n" + mf
+        return out
 
 
 @dataclass
@@ -792,3 +806,15 @@ def _dedup_consecutive(lines: list[str]) -> list[str]:
     if repeat > 0:
         deduped.append(f"  [above line repeated {repeat}×]")
     return deduped
+
+
+# Auto-register built-in strategies.  Import is deferred to avoid circular
+# imports at module-load time; safe to call multiple times (idempotent).
+def _register_builtin_strategies() -> None:
+    try:
+        import contextclipper.engine.strategies as _s  # noqa: F401
+    except Exception:
+        pass
+
+
+_register_builtin_strategies()

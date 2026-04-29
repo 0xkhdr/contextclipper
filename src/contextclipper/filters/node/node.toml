@@ -64,14 +64,14 @@ match = "^pnpm (install|add|remove|update)"
 match = "^npm (install|ci|update|i$)"
 
   [[filter.command_overrides.rules]]
-  description = "Drop npm progress and timer lines"
+  description = "Drop npm deprecated/warn/notice/timing/progress lines (npm v6-v10)"
   type = "drop_matching"
-  pattern = "^(npm WARN|npm notice|npm timing|added \\d+ packages|changed \\d+ packages|removed \\d+ packages|up to date|audited)"
+  pattern = "(?i)^(npm (WARN|warn|notice|timing|verbose)|added \\d+ packages|changed \\d+ packages|removed \\d+ packages|up to date|audited)"
 
   [[filter.command_overrides.rules]]
   description = "Keep error and funding lines"
   type = "keep_matching"
-  pattern = "^(npm ERR!|npm error|ERROR|error:)"
+  pattern = "(?i)^(npm ERR!|npm error|ERROR|error:)"
   priority = 10
 
 # ── yarn install ──────────────────────────────────────────────────────────────

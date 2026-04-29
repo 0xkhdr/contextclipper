@@ -1,0 +1,28 @@
+{
+  "name": "ctxclp_run",
+  "description": "Execute a shell command and return compressed output via ContextClipper. Saves 80-95% of tokens compared to raw output. The response includes a [CTXCLP:raw=<uuid>] footer — call ctxclp_fetch with that uuid to retrieve the full uncompressed output if needed.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "command": {
+        "type": "string",
+        "description": "Shell command to execute"
+      },
+      "max_tokens": {
+        "type": "integer",
+        "description": "Maximum tokens in the compressed output (optional)",
+        "default": 4000
+      },
+      "stream": {
+        "type": "boolean",
+        "description": "Use streaming mode for long-running commands (optional)",
+        "default": false
+      }
+    },
+    "required": ["command"]
+  },
+  "implementation": {
+    "type": "shell",
+    "command": "ctxclp run {{#if stream}}--stream{{/if}} {{#if max_tokens}}--max-tokens {{max_tokens}}{{/if}} -- {{{command}}}"
+  }
+}

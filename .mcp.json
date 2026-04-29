@@ -1,12 +1,12 @@
 {
   "mcpServers": {
     "contextclipper": {
-      "command": "/var/www/html/rai/up/context-clipper/contextclipper/.venv/bin/python3 -m ctxclp_cli",
+      "command": "/var/www/html/rai/up/contextclipper/.venv/bin/ctxclp",
       "args": [
         "serve"
       ],
       "env": {
-        "CTXCLP_PROJECT_ROOT": "${workspaceFolder}"
+        "CTXCLP_PROJECT_ROOT": "/var/www/html/rai/up/contextclipper"
       }
     }
   }

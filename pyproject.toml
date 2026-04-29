@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "contextclipper"
-version = "0.3.0"
+version = "0.4.0"
 description = "Universal token optimizer for AI coding agents — transparent shell compression + code-graph index"
 readme = "README.md"
 license = { text = "MIT" }

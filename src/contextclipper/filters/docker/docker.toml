@@ -13,7 +13,7 @@ match = "^(docker|docker-compose|docker compose) (ps|compose ps)"
   [[filter.command_overrides.rules]]
   description = "Shorten long container IDs to first 12 chars"
   type = "regex_replace"
-  pattern = "\\b([0-9a-f]{13,64})\\b"
+  pattern = "([0-9a-f]{12})[0-9a-f]{1,52}\\b"
   replacement = "\\1"
 
 # ── docker build / pull / push ────────────────────────────────────────────────

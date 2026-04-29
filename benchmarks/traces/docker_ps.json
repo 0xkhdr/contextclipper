@@ -1,0 +1,10 @@
+{
+  "name": "docker_ps",
+  "description": "docker ps -a output with full 64-char hex container IDs (realistic output)",
+  "command": "docker ps -a",
+  "exit_code": 0,
+  "expected_filter": "docker",
+  "min_reduction_pct": 5,
+  "notes": "docker ps compression shortens 64-char SHA256 container IDs to their prefix",
+  "output": "CONTAINER ID                                                       IMAGE                        COMMAND                  CREATED         STATUS                      PORTS                    NAMES\nabc1def2abc1def2abc1def2abc1def2abc1def2abc1def2abc1def2abc1def2   nginx:1.25                   \"/docker-entrypoint.…\"   2 hours ago     Up 2 hours                  0.0.0.0:80->80/tcp       web-server\nbcd2efa3bcd2efa3bcd2efa3bcd2efa3bcd2efa3bcd2efa3bcd2efa3bcd2efa3   postgres:15                  \"docker-entrypoint.s…\"   2 hours ago     Up 2 hours                  0.0.0.0:5432->5432/tcp   db\ncde3efb4cde3efb4cde3efb4cde3efb4cde3efb4cde3efb4cde3efb4cde3efb4   redis:7                      \"docker-entrypoint.s…\"   2 hours ago     Up 2 hours                  0.0.0.0:6379->6379/tcp   cache\ndef4efc5def4efc5def4efc5def4efc5def4efc5def4efc5def4efc5def4efc5   my-app:latest                \"python app.py\"          1 hour ago      Exited (1) 45 minutes ago                            app-worker-1\nefa5efd6efa5efd6efa5efd6efa5efd6efa5efd6efa5efd6efa5efd6efa5efd6   my-app:latest                \"python app.py\"          1 hour ago      Up 1 hour                                            app-worker-2\nfab6efe7fab6efe7fab6efe7fab6efe7fab6efe7fab6efe7fab6efe7fab6efe7   my-app:latest                \"python app.py\"          1 hour ago      Up 1 hour                                            app-worker-3\nabc7eff8abc7eff8abc7eff8abc7eff8abc7eff8abc7eff8abc7eff8abc7eff8   my-app:latest                \"python app.py\"          1 hour ago      Up 1 hour                                            app-worker-4\nbcd8efa9bcd8efa9bcd8efa9bcd8efa9bcd8efa9bcd8efa9bcd8efa9bcd8efa9   my-app:latest                \"python app.py\"          30 minutes ago  Exited (137) 20 minutes ago                          app-worker-5\n"
+}
