@@ -9,7 +9,7 @@ accumulate the full output.  Rules that require full buffering (``tail``,
 
 Usage::
 
-    from contextclipper.engine.streaming import StreamingFilter, run_streaming
+    from contextclipper.shell.streaming import StreamingFilter, run_streaming
     stats = run_streaming("npm test", flt, exit_code_ref=[0], timeout=120)
 """
 

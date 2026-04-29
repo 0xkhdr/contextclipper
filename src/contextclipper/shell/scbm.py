@@ -19,7 +19,7 @@ retention under a budget compared to tail-truncation.
 
 Example
 -------
->>> from contextclipper.engine.scbm import semantic_compress
+>>> from contextclipper.shell.scbm import semantic_compress
 >>> kept = semantic_compress(lines, "pytest", exit_code=1, max_tokens=500)
 """
 

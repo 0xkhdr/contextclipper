@@ -25,13 +25,13 @@ _DEFAULT_TIMEOUT = int(os.environ.get("CTXCLP_COMMAND_TIMEOUT", 300))
 
 
 def _get_graph():  # type: ignore[no-untyped-def]
-    from contextclipper.engine.graph import GraphDB  # type: ignore[import-not-found]
+    from contextclipper.graph.builder import GraphDB  # type: ignore[import-not-found]
     db_path = Path(os.environ.get("CTXCLP_DB", str(Path.home() / ".local/share/contextclipper/graph.db")))
     return GraphDB(db_path)
 
 
 def _get_stats():  # type: ignore[no-untyped-def]
-    from contextclipper.engine.stats import StatsDB  # type: ignore[import-not-found]
+    from contextclipper.core.stats import StatsDB  # type: ignore[import-not-found]
     return StatsDB()
 
 
@@ -97,9 +97,9 @@ def cmd_run(
         sys.stdout.write(combined)
         sys.exit(result.returncode)
 
-    from contextclipper.engine.filters import compress_output  # type: ignore[import-not-found]
-    from contextclipper.engine.logging import get_logger  # type: ignore[import-not-found]
-    from contextclipper.engine.tee import save_raw  # type: ignore[import-not-found]
+    from contextclipper.shell.engine import compress_output  # type: ignore[import-not-found]
+    from contextclipper.core.logging import get_logger  # type: ignore[import-not-found]
+    from contextclipper.core.tee import save_raw  # type: ignore[import-not-found]
     log = get_logger()
 
     raw_id = save_raw(full_cmd, combined, result.returncode)
@@ -141,10 +141,10 @@ def cmd_run(
 
 def _cmd_run_stream(full_cmd: str, timeout: int, max_tokens: int | None) -> None:
     """Internal: streaming execution path."""
-    from contextclipper.engine.filters import get_registry  # type: ignore[import-not-found]
-    from contextclipper.engine.streaming import run_streaming  # type: ignore[import-not-found]
-    from contextclipper.engine.tee import save_raw  # type: ignore[import-not-found]
-    from contextclipper.engine.logging import get_logger  # type: ignore[import-not-found]
+    from contextclipper.shell.engine import get_registry  # type: ignore[import-not-found]
+    from contextclipper.shell.streaming import run_streaming  # type: ignore[import-not-found]
+    from contextclipper.core.tee import save_raw  # type: ignore[import-not-found]
+    from contextclipper.core.logging import get_logger  # type: ignore[import-not-found]
     log = get_logger()
 
     reg = get_registry()
@@ -190,7 +190,7 @@ def _cmd_run_stream(full_cmd: str, timeout: int, max_tokens: int | None) -> None
 
 
 def _print_dry_run_report(cr) -> None:  # type: ignore[no-untyped-def]
-    from contextclipper.engine.filters import _ERROR_SIGNALS  # type: ignore[import-not-found]
+    from contextclipper.shell.engine import _ERROR_SIGNALS  # type: ignore[import-not-found]
     removed = cr.removed_lines or []
     err_console.print()
     err_console.print(Panel(
@@ -231,7 +231,7 @@ def cmd_fetch(output_id: str) -> None:
     Agents that see ``raw_id=<id>`` or ``[CTXCLP:raw=<id>]`` in compressed
     output can call this to get the complete original output. TTL is 24h by default.
     """
-    from contextclipper.engine.tee import get_raw  # type: ignore[import-not-found]
+    from contextclipper.core.tee import get_raw  # type: ignore[import-not-found]
     data = get_raw(output_id)
     if data is None:
         err_console.print(
@@ -628,7 +628,7 @@ def cmd_audit(days: int, limit: int, cmd_filter: str | None, as_json: bool) -> N
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 def cmd_validate(as_json: bool) -> None:
     """Run a self-check on the filter registry and the code graph."""
-    from contextclipper.engine import get_registry  # type: ignore[import-not-found]
+    from contextclipper.shell.engine import get_registry  # type: ignore[import-not-found]
 
     reg = get_registry()
     filt_report = reg.validate()
@@ -675,8 +675,8 @@ def cmd_validate(as_json: bool) -> None:
 def cmd_doctor() -> None:
     """Run a comprehensive health check: filters, graph DB, hooks, tee store."""
     from contextclipper.cli.install import detect_agents  # type: ignore[import-not-found]
-    from contextclipper.engine import get_registry  # type: ignore[import-not-found]
-    from contextclipper.engine.tee import _tee_dir  # type: ignore[import-not-found]
+    from contextclipper.shell.engine import get_registry  # type: ignore[import-not-found]
+    from contextclipper.core.tee import _tee_dir  # type: ignore[import-not-found]
 
     issues: list[str] = []
     warnings_list: list[str] = []
@@ -834,7 +834,7 @@ priority = 5
 @click.option("--json", "as_json", is_flag=True, help="Output as JSON")
 def filter_list(as_json: bool) -> None:
     """List all loaded filters with their match patterns and rule counts."""
-    from contextclipper.engine import get_registry  # type: ignore[import-not-found]
+    from contextclipper.shell.engine import get_registry  # type: ignore[import-not-found]
     reg = get_registry()
     filters = reg.all_filters()
 
@@ -882,8 +882,8 @@ def filter_list(as_json: bool) -> None:
 @click.option("--no-run", is_flag=True, help="Read output from stdin instead of running command")
 def filter_test(command: str, no_run: bool) -> None:
     """Run COMMAND and show a safety analysis of how it would be clipped."""
-    from contextclipper.engine.filters import compress_output, _ERROR_SIGNALS  # type: ignore[import-not-found]
-    from contextclipper.engine import get_registry  # type: ignore[import-not-found]
+    from contextclipper.shell.engine import compress_output, _ERROR_SIGNALS  # type: ignore[import-not-found]
+    from contextclipper.shell.engine import get_registry  # type: ignore[import-not-found]
 
     if no_run:
         raw_output = sys.stdin.read()
@@ -957,7 +957,7 @@ def cmd_hook() -> None:
 @click.argument("command", default="git status")
 def hook_test(command: str) -> None:
     """Simulate the hook chain for a given command."""
-    from contextclipper.engine.filters import compress_output  # type: ignore[import-not-found]
+    from contextclipper.shell.engine import compress_output  # type: ignore[import-not-found]
 
     console.print(f"[bold]Simulating hook for:[/bold] {command}")
     result = subprocess.run(command, shell=True, capture_output=True, text=True)
@@ -1074,7 +1074,7 @@ def registry_install(name: str, force: bool) -> None:
     console.print(f"[green]Installed:[/green] {name} → {out_path}")
     console.print("[dim]Run [cyan]ctxclp filter list[/cyan] to verify.[/dim]")
 
-    from contextclipper.engine import get_registry  # type: ignore[import-not-found]
+    from contextclipper.shell.engine import get_registry  # type: ignore[import-not-found]
     get_registry().reload()
 
 

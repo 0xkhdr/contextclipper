@@ -4,7 +4,7 @@ Storage hardening:
 
 - Tee directory is created with mode 0o700; files are written with mode 0o600
   to prevent other local users from reading captured output.
-- Command + output are redacted by :mod:`contextclipper.engine.redact` before being
+- Command + output are redacted by :mod:`contextclipper.core.redact` before being
   written, masking common tokens / passwords. Disable redaction with
   ``CTXCLP_TEE_REDACT=0`` (NOT recommended). Disable persistence entirely with
   ``CTXCLP_DISABLE_TEE=1``.

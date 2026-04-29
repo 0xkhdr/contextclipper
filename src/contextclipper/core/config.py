@@ -26,7 +26,7 @@ Supported keys (all optional)
 
 Usage::
 
-    from contextclipper.engine.project_config import load_project_config, ProjectConfig
+    from contextclipper.core.config import load_project_config, ProjectConfig
     cfg = load_project_config()           # search from cwd
     cfg = load_project_config("/my/proj") # search from explicit root
 """

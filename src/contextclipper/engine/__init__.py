@@ -1,19 +1,27 @@
-"""ctxclp-engine: shared filter engine, code graph indexer, and analytics."""
+"""ctxclp-engine: shared filter engine, code graph indexer, and analytics (DEPRECATED)."""
 
-from .filters import (
-    CompressionResult,
-    FilterParseError,
+import warnings
+
+from contextclipper.core.types import CompressionResult
+from contextclipper.core.exceptions import FilterParseError
+from contextclipper.shell.engine import (
     FilterRegistry,
     compress_output,
     get_registry,
     register_strategy,
     unregister_strategy,
 )
-from .graph import GraphDB
-from .logging import get_logger
-from .redact import redact_command, redact_text
-from .stats import StatsDB
-from .tee import get_raw, save_raw
+from contextclipper.graph.builder import GraphDB
+from contextclipper.core.logging import get_logger
+from contextclipper.core.redact import redact_command, redact_text
+from contextclipper.core.stats import StatsDB
+from contextclipper.core.tee import get_raw, save_raw
+
+warnings.warn(
+    "contextclipper.engine is deprecated, use contextclipper.core, contextclipper.shell, and contextclipper.graph",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 __all__ = [
     "CompressionResult",

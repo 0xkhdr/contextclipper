@@ -1,7 +1,7 @@
 """Built-in PluggableStrategy implementations for common output types.
 
 Strategies are registered automatically when this module is imported (done in
-:mod:`contextclipper.engine.filters`).  Each strategy is a callable with
+:mod:`contextclipper.shell.engine`).  Each strategy is a callable with
 signature ``(lines, command, exit_code) -> list[str]`` and can be selected by
 name in a TOML filter via ``strategy = "<name>"``.
 

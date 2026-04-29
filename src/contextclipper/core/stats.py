@@ -1,6 +1,6 @@
 """Local analytics: tracks token savings and command usage in SQLite.
 
-Privacy: command text is redacted via :mod:`contextclipper.engine.redact` before being
+Privacy: command text is redacted via :mod:`contextclipper.core.redact` before being
 recorded. Disable persistence entirely with ``CTXCLP_DISABLE_STATS=1``.
 
 Telemetry (regret detection)

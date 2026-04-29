@@ -6,10 +6,10 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from contextclipper.engine.filters import compress_output  # type: ignore[import-not-found]
-from contextclipper.engine.graph import GraphDB  # type: ignore[import-not-found]
-from contextclipper.engine.stats import StatsDB  # type: ignore[import-not-found]
-from contextclipper.engine.tee import get_raw, save_raw  # type: ignore[import-not-found]
+from contextclipper.shell.engine import compress_output  # type: ignore[import-not-found]
+from contextclipper.graph.builder import GraphDB  # type: ignore[import-not-found]
+from contextclipper.core.stats import StatsDB  # type: ignore[import-not-found]
+from contextclipper.core.tee import get_raw, save_raw  # type: ignore[import-not-found]
 
 
 def tool_get_file(

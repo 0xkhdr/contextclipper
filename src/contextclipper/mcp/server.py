@@ -20,8 +20,8 @@ from mcp.types import (
     Tool,
 )
 
-from contextclipper.engine.graph import GraphDB  # type: ignore[import-not-found]
-from contextclipper.engine.stats import StatsDB  # type: ignore[import-not-found]
+from contextclipper.graph.builder import GraphDB  # type: ignore[import-not-found]
+from contextclipper.core.stats import StatsDB  # type: ignore[import-not-found]
 from contextclipper.mcp.tools import (  # type: ignore[import-not-found]
     tool_get_affected,
     tool_get_file,
