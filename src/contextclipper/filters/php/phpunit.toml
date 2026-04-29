@@ -1,45 +1,55 @@
 [filter]
 name = "phpunit"
-description = "Compress PHPUnit test output, keeping only failures and summary"
+description = "Compress PHPUnit test output, keeping only failures, errors, and the summary line"
 
 [[filter.patterns]]
 match_command = "^(php\\s+)?vendor/bin/phpunit|^phpunit"
 
 [[filter.rules]]
-# Drop passing test dots and F markers individual lines
+description = "Drop passing test progress dots"
 type = "drop_matching"
 pattern = "^\\.+$"
 
 [[filter.rules]]
-# Drop header/footer decorative lines
+description = "Drop PHPUnit version header"
 type = "drop_matching"
 pattern = "^PHPUnit \\d+\\.\\d+"
 
 [[filter.rules]]
+description = "Drop runtime info line"
 type = "drop_matching"
 pattern = "^Runtime:"
 
 [[filter.rules]]
+description = "Drop configuration file reference"
 type = "drop_matching"
 pattern = "^Configuration:"
 
 [[filter.rules]]
-# Drop "OK" summary when all tests pass (no failures)
+description = "Drop blank lines"
+type = "drop_matching"
+pattern = "^\\s*$"
+
+[[filter.rules]]
+description = "Drop the OK line when all tests pass (no failures)"
 type = "drop_matching"
 pattern = "^OK \\(\\d+ test"
 
 [[filter.rules]]
-# Keep FAILURES section and everything after
+description = "Keep the FAILURES section block (start to empty line)"
 type = "keep_section"
 start_pattern = "^FAILURES!"
 end_pattern = "^$"
 
 [[filter.rules]]
-# Always keep the summary line
+description = "Always keep summary and failure marker lines regardless of section"
 type = "keep_matching"
-pattern = "^(Tests:|FAILURES!|Errors:|OK \\()"
+pattern = "^(Tests:|FAILURES!|Errors:|OK \\(|Time:)"
 priority = 10
 
 [filter.on_failure]
-# On non-zero exit, always keep full FAILURES block
-preserve_sections = ["FAILURES!", "Errors:"]
+[[filter.on_failure.rules]]
+description = "On non-zero exit, preserve full stack traces and failure details"
+type = "keep_matching"
+pattern = "^(FAILURES!|\\d\\)|  |There (was|were)|Tests:|Errors:|Time:)"
+priority = 5

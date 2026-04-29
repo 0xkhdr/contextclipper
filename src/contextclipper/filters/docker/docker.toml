@@ -1,44 +1,82 @@
 [filter]
 name = "docker"
-description = "Compress Docker command output"
+description = "Compress Docker command output, keeping only build steps, errors, and container status"
 
 [[filter.patterns]]
-match_command = "^docker\\s+(ps|images|logs|compose|build|pull|push)"
+match_command = "^(docker|docker-compose|docker compose)\\s+(ps|images|logs|compose|build|pull|push|run|exec|stop|start|rm|rmi|network|volume|inspect)"
+
+# ── docker ps ─────────────────────────────────────────────────────────────────
 
 [[filter.command_overrides]]
-match = "^docker (ps|compose ps)"
+match = "^(docker|docker-compose|docker compose) (ps|compose ps)"
 
   [[filter.command_overrides.rules]]
-  # Collapse long container IDs
+  description = "Shorten long container IDs to first 12 chars"
   type = "regex_replace"
-  pattern = "([0-9a-f]{12,64})"
-  replacement = "\\1[:12]"
+  pattern = "\\b([0-9a-f]{13,64})\\b"
+  replacement = "\\1"
+
+# ── docker build / pull / push ────────────────────────────────────────────────
 
 [[filter.command_overrides]]
 match = "^docker (build|pull|push)"
 
   [[filter.command_overrides.rules]]
-  # Drop layer pull/push progress lines
+  description = "Drop per-layer pull progress lines (Pulling fs layer, Waiting, etc.)"
   type = "drop_matching"
-  pattern = "^[0-9a-f]+: (Pulling fs layer|Waiting|Download complete|Pull complete|Already exists|Pushing)"
+  pattern = "^[0-9a-f]+: (Pulling fs layer|Waiting|Download complete|Pull complete|Already exists|Pushing|Pushed|Layer already exists|Preparing|Retrying)"
 
   [[filter.command_overrides.rules]]
+  description = "Drop digest sha256 lines — not useful in most agent contexts"
   type = "drop_matching"
-  pattern = "^Digest: sha256:"
+  pattern = "^Digest: sha256:|^[0-9a-f]+: digest:"
 
   [[filter.command_overrides.rules]]
+  description = "Drop blank lines"
+  type = "drop_matching"
+  pattern = "^\\s*$"
+
+  [[filter.command_overrides.rules]]
+  description = "Keep build step headers, image names, status and error lines"
   type = "keep_matching"
-  pattern = "^(Status:|Successfully|Step \\d+|ERROR|error)"
+  pattern = "^(Status:|Successfully (built|tagged|pushed)|Step \\d+/\\d+|---> |ERROR|error:|\\[\\+\\]|naming to)"
   priority = 10
 
+# ── docker logs ───────────────────────────────────────────────────────────────
+
 [[filter.command_overrides]]
-match = "^docker logs"
+match = "^docker (logs|compose logs)"
 
   [[filter.command_overrides.rules]]
-  # Keep last 50 lines only
+  description = "Keep only the last 50 log lines — oldest lines are usually irrelevant"
   type = "tail"
   lines = 50
 
   [[filter.command_overrides.rules]]
+  description = "Drop heartbeat/health-check INFO lines that repeat constantly"
   type = "drop_matching"
-  pattern = "^\\d{4}-\\d{2}-\\d{2}T.*INFO.*heartbeat"
+  pattern = "^\\d{4}-\\d{2}-\\d{2}T.*\\bINFO\\b.*(heartbeat|health.?check|ping|keepalive)"
+
+# ── docker inspect ────────────────────────────────────────────────────────────
+
+[[filter.command_overrides]]
+match = "^docker inspect"
+
+  [[filter.command_overrides.rules]]
+  description = "Extract only the most actionable fields from inspect JSON output"
+  type = "json_select"
+  fields = [
+    ".[0].State.Status",
+    ".[0].State.ExitCode",
+    ".[0].State.Error",
+    ".[0].Name",
+    ".[0].NetworkSettings.IPAddress",
+    ".[0].Config.Image",
+  ]
+
+[filter.on_failure]
+[[filter.on_failure.rules]]
+description = "On failure, keep all error output for diagnosis"
+type = "keep_matching"
+pattern = "^(ERROR|Error|error:|failed|FAIL|panic)"
+priority = 5

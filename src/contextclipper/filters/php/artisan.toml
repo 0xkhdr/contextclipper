@@ -1,31 +1,40 @@
 [filter]
 name = "artisan"
-description = "Compress Laravel Artisan command output"
+description = "Compress Laravel Artisan command output, collapsing repetitive INFO lines and keeping errors"
 
 [[filter.patterns]]
 match_command = "^php artisan|^artisan"
 
 [[filter.rules]]
+description = "Drop blank lines"
 type = "drop_matching"
 pattern = "^\\s*$"
 
 [[filter.rules]]
-# Drop the decorative Laravel banner lines
+description = "Drop the decorative Laravel ASCII art banner lines"
 type = "drop_matching"
 pattern = "^  __ "
 
 [[filter.rules]]
+description = "Drop additional banner decoration characters"
 type = "drop_matching"
-pattern = "^  / /|^  \\\\|^  |   _"
+pattern = "^  [/\\\\]|^   _"
 
 [[filter.rules]]
-# Keep migration/seeder output lines
+description = "Keep migration/seeder status, error, and warning lines"
 type = "keep_matching"
-pattern = "^(Migrating|Migrated|Rolling back|Rolled back|Seeding|Seeded|ERROR|WARN|INFO|\\[ERROR\\])"
+pattern = "^(Migrating|Migrated|Rolling back|Rolled back|Seeding|Seeded|ERROR|WARN|\\[ERROR\\]|Done)"
 priority = 10
 
 [[filter.rules]]
-# Collapse "INFO" prefix lines
+description = "Collapse repetitive INFO prefix lines (from artisan commands) to max 5 per block"
 type = "prefix_collapse"
 prefix = "INFO"
 max_lines = 5
+
+[filter.on_failure]
+[[filter.on_failure.rules]]
+description = "On failure, keep all error and exception lines"
+type = "keep_matching"
+pattern = "^(ERROR|\\[ERROR\\]|Error|Exception|SQLSTATE|failed|Failed)"
+priority = 5

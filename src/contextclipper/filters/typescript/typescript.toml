@@ -1,0 +1,30 @@
+[filter]
+name = "typescript"
+description = "Compress TypeScript compiler (tsc) output, keeping only type errors and summary"
+
+[[filter.patterns]]
+match_command = "^(tsc|npx tsc|pnpm tsc|yarn tsc|bun tsc)"
+
+[[filter.rules]]
+description = "Drop blank lines"
+type = "drop_matching"
+pattern = "^\\s*$"
+
+[[filter.rules]]
+description = "Keep all type error lines — each is actionable"
+type = "keep_matching"
+pattern = "^(.*\\.tsx?:\\d+:\\d+ - error|.*\\.tsx?:\\d+:\\d+ - warning|Found \\d+ error|error TS\\d+)"
+priority = 10
+
+[[filter.rules]]
+description = "Keep the summary count line"
+type = "keep_matching"
+pattern = "^Found \\d+ error"
+priority = 15
+
+[filter.on_failure]
+[[filter.on_failure.rules]]
+description = "On failure, keep all error lines including the code context lines"
+type = "keep_matching"
+pattern = "^(.*\\.tsx?:|error TS|Found \\d+|\\s+~+|\\s+\\^+)"
+priority = 5

@@ -1,0 +1,91 @@
+[filter]
+name = "terraform"
+description = "Compress Terraform output, keeping only resource changes, errors, and plan summaries"
+
+[[filter.patterns]]
+match_command = "^terraform\\s+(plan|apply|destroy|init|validate|fmt|show|import|output|refresh)"
+
+# ── terraform plan ────────────────────────────────────────────────────────────
+
+[[filter.command_overrides]]
+match = "^terraform plan"
+
+  [[filter.command_overrides.rules]]
+  description = "Drop the 'Refreshing state...' lines for each resource"
+  type = "drop_matching"
+  pattern = "^.*: Refreshing state\\.\\.\\."
+
+  [[filter.command_overrides.rules]]
+  description = "Drop blank lines"
+  type = "drop_matching"
+  pattern = "^\\s*$"
+
+  [[filter.command_overrides.rules]]
+  description = "Drop the 'Note: Objects have changed...' boilerplate"
+  type = "drop_matching"
+  pattern = "^(Note: Objects have changed|Unless you have made equivalent changes)"
+
+  [[filter.command_overrides.rules]]
+  description = "Keep resource change lines (+/-/~), plan summary, and errors"
+  type = "keep_matching"
+  pattern = "^(  \\+|  \\-|  ~|  #|Terraform will|Plan:|No changes|Error:|Warning:|must be replaced|forces replacement)"
+  priority = 10
+
+# ── terraform apply ───────────────────────────────────────────────────────────
+
+[[filter.command_overrides]]
+match = "^terraform apply"
+
+  [[filter.command_overrides.rules]]
+  description = "Drop creation/destruction progress dots"
+  type = "drop_matching"
+  pattern = "^.*: (Creating|Destroying|Modifying|Still creating|Still destroying)\\.\\.\\."
+
+  [[filter.command_overrides.rules]]
+  description = "Drop blank lines"
+  type = "drop_matching"
+  pattern = "^\\s*$"
+
+  [[filter.command_overrides.rules]]
+  description = "Keep resource created/destroyed/modified completion lines and errors"
+  type = "keep_matching"
+  pattern = "^(.*: (Creation complete|Destruction complete|Modifications complete)|Apply complete!|Error:|Warning:|Changes to Outputs)"
+  priority = 10
+
+# ── terraform init ────────────────────────────────────────────────────────────
+
+[[filter.command_overrides]]
+match = "^terraform init"
+
+  [[filter.command_overrides.rules]]
+  description = "Drop per-provider downloading/installing lines"
+  type = "drop_matching"
+  pattern = "^(- (Downloading|Installing|Finding|Using previously-installed)|\\* (Installing|version))"
+
+  [[filter.command_overrides.rules]]
+  description = "Drop blank lines"
+  type = "drop_matching"
+  pattern = "^\\s*$"
+
+  [[filter.command_overrides.rules]]
+  description = "Keep initialization complete messages and errors"
+  type = "keep_matching"
+  pattern = "^(Terraform has been successfully initialized|Error:|Warning:|Initializing|\\* provider)"
+  priority = 10
+
+# ── terraform validate ────────────────────────────────────────────────────────
+
+[[filter.command_overrides]]
+match = "^terraform (validate|fmt)"
+
+  [[filter.command_overrides.rules]]
+  description = "Drop blank lines"
+  type = "drop_matching"
+  pattern = "^\\s*$"
+
+[filter.on_failure]
+[[filter.on_failure.rules]]
+description = "On failure, keep all error lines and context for HCL debugging"
+type = "keep_matching"
+pattern = "^(Error:|│|╷|╵|Warning:|on |with |\\s+\\|)"
+priority = 5

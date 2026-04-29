@@ -1,43 +1,98 @@
 [filter]
 name = "node"
-description = "Compress Node.js tooling output (jest, vitest, eslint, pnpm)"
+description = "Compress Node.js tooling output (jest, vitest, eslint, pnpm, npm, yarn), keeping only failures and actionable information"
 
 [[filter.patterns]]
-match_command = "^(jest|npx jest|vitest|eslint|pnpm|npm|yarn)"
+match_command = "^(jest|npx jest|vitest|npx vitest|eslint|pnpm|npm|yarn|bun (test|install|add|remove|run))"
+
+# ── jest / vitest ─────────────────────────────────────────────────────────────
 
 [[filter.command_overrides]]
-match = "^(jest|npx jest|vitest)"
+match = "^(jest|npx jest|vitest|npx vitest|bun test)"
 
   [[filter.command_overrides.rules]]
+  description = "Drop passing test checkmarks"
   type = "drop_matching"
-  pattern = "^(PASS|✓|●.*✓)"
+  pattern = "^(PASS|✓|✔|●\\s+.*✓)"
 
   [[filter.command_overrides.rules]]
+  description = "Drop blank lines between test blocks"
+  type = "drop_matching"
+  pattern = "^\\s*$"
+
+  [[filter.command_overrides.rules]]
+  description = "Keep failure lines, run/summary lines, and error details"
   type = "keep_matching"
-  pattern = "^(FAIL|✕|×|RUNS|Test Suites:|Tests:|Snapshots:|Time:|●)"
+  pattern = "^(FAIL|RUNS|✕|×|●|Test Suites:|Tests:|Snapshots:|Time:|● |  ●|FAILED|ERRORS)"
   priority = 10
+
+# ── eslint ────────────────────────────────────────────────────────────────────
 
 [[filter.command_overrides]]
 match = "^eslint"
 
   [[filter.command_overrides.rules]]
+  description = "Drop blank lines"
   type = "drop_matching"
   pattern = "^\\s*$"
 
   [[filter.command_overrides.rules]]
-  # Keep only error/warning lines
+  description = "Keep file paths, error/warning lines, and summary totals"
   type = "keep_matching"
-  pattern = "^(.*\\.\\w+$|\\s+\\d+:\\d+\\s+(error|warning)|✖|\\d+ (problem|error|warning))"
+  pattern = "^(.*\\.\\w+$|\\s+\\d+:\\d+\\s+(error|warning)|✖|✓|\\d+ (problem|error|warning)|Oops)"
   priority = 10
+
+# ── pnpm install / add / remove ───────────────────────────────────────────────
 
 [[filter.command_overrides]]
-match = "^pnpm (install|add|remove)"
+match = "^pnpm (install|add|remove|update)"
 
   [[filter.command_overrides.rules]]
+  description = "Drop package list headers and progress lines"
   type = "drop_matching"
-  pattern = "^(Packages:|Progress:|Already up to date)"
+  pattern = "^(Packages:|Progress:|Already up to date|Lockfile is up to date|\\s+\\d+ packages)"
 
   [[filter.command_overrides.rules]]
+  description = "Keep add/remove summaries, errors, and done message"
   type = "keep_matching"
-  pattern = "^(\\+ |\\- |Done|ERR_PNPM|error)"
+  pattern = "^(\\+ |\\- |Done|ERR_PNPM|error|WARN|packages added|packages removed)"
   priority = 10
+
+# ── npm install / ci ──────────────────────────────────────────────────────────
+
+[[filter.command_overrides]]
+match = "^npm (install|ci|update|i$)"
+
+  [[filter.command_overrides.rules]]
+  description = "Drop npm progress and timer lines"
+  type = "drop_matching"
+  pattern = "^(npm WARN|npm notice|npm timing|added \\d+ packages|changed \\d+ packages|removed \\d+ packages|up to date|audited)"
+
+  [[filter.command_overrides.rules]]
+  description = "Keep error and funding lines"
+  type = "keep_matching"
+  pattern = "^(npm ERR!|npm error|ERROR|error:)"
+  priority = 10
+
+# ── yarn install ──────────────────────────────────────────────────────────────
+
+[[filter.command_overrides]]
+match = "^yarn (install|add|remove|upgrade)"
+
+  [[filter.command_overrides.rules]]
+  description = "Drop yarn progress spinners and fetch lines"
+  type = "drop_matching"
+  pattern = "^(yarn install|\\[1/\\d\\]|\\[2/\\d\\]|\\[3/\\d\\]|\\[4/\\d\\]|info|success)"
+
+  [[filter.command_overrides.rules]]
+  description = "Keep error lines"
+  type = "keep_matching"
+  pattern = "^(error|warning|ERROR)"
+  priority = 10
+
+[filter.on_failure]
+[[filter.on_failure.rules]]
+description = "On failure, keep all error/exception detail lines"
+type = "keep_matching"
+pattern = "^(\\s+(at |Error:|●|FAIL|✕|×)|Error:|TypeError:|ReferenceError:|SyntaxError:)"
+priority = 5

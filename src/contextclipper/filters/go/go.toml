@@ -1,0 +1,81 @@
+[filter]
+name = "go"
+description = "Compress Go toolchain output (go build, test, vet, mod), keeping only errors, test failures, and summaries"
+
+[[filter.patterns]]
+match_command = "^go\\s+(build|test|vet|mod|run|generate|install|get|fmt|lint)"
+
+# ── go build / vet ────────────────────────────────────────────────────────────
+
+[[filter.command_overrides]]
+match = "^go (build|vet)"
+
+  [[filter.command_overrides.rules]]
+  description = "Drop blank lines"
+  type = "drop_matching"
+  pattern = "^\\s*$"
+
+  [[filter.command_overrides.rules]]
+  description = "Keep error lines — go build errors are on specific file:line"
+  type = "keep_matching"
+  pattern = "^(.*\\.go:\\d+:\\d+:|.*\\.go:\\d+:|\\./|#|vet:)"
+  priority = 10
+
+# ── go test ───────────────────────────────────────────────────────────────────
+
+[[filter.command_overrides]]
+match = "^go test"
+
+  [[filter.command_overrides.rules]]
+  description = "Drop passing package 'ok' lines"
+  type = "drop_matching"
+  pattern = "^ok\\s+"
+
+  [[filter.command_overrides.rules]]
+  description = "Drop blank lines"
+  type = "drop_matching"
+  pattern = "^\\s*$"
+
+  [[filter.command_overrides.rules]]
+  description = "Keep FAIL lines, test names that failed, --- FAIL markers, and panic output"
+  type = "keep_matching"
+  pattern = "^(FAIL|--- FAIL|--- PASS: .*(SLOW)|panic:|\\s+Error |\\s+goroutine |\\s+testing\\.go)"
+  priority = 10
+
+# ── go mod ────────────────────────────────────────────────────────────────────
+
+[[filter.command_overrides]]
+match = "^go mod"
+
+  [[filter.command_overrides.rules]]
+  description = "Drop per-package download progress lines"
+  type = "drop_matching"
+  pattern = "^go: downloading "
+
+  [[filter.command_overrides.rules]]
+  description = "Drop blank lines"
+  type = "drop_matching"
+  pattern = "^\\s*$"
+
+  [[filter.command_overrides.rules]]
+  description = "Keep error and tidy summary lines"
+  type = "keep_matching"
+  pattern = "^(go: |verifying |Error:)"
+  priority = 10
+
+# ── go fmt ────────────────────────────────────────────────────────────────────
+
+[[filter.command_overrides]]
+match = "^go fmt"
+
+  [[filter.command_overrides.rules]]
+  description = "Drop blank lines from fmt output"
+  type = "drop_matching"
+  pattern = "^\\s*$"
+
+[filter.on_failure]
+[[filter.on_failure.rules]]
+description = "On failure, keep all error and goroutine dump lines"
+type = "keep_matching"
+pattern = "^(.*\\.go:|FAIL|panic:|goroutine |\\s+(at |runtime/|testing\\.go))"
+priority = 5

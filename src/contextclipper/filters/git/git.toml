@@ -1,52 +1,93 @@
 [filter]
 name = "git"
-description = "Compress common git command output"
+description = "Compress common git command output, keeping only actionable status, diff, and log information"
 
 [[filter.patterns]]
-match_command = "^git\\s+(status|diff|log|add|commit|push|pull|fetch|merge)"
+match_command = "^git\\s+(status|diff|log|add|commit|push|pull|fetch|merge|rebase|cherry-pick|stash|tag|branch|checkout|switch|restore)"
 
-# git status compression
+# ── git status ────────────────────────────────────────────────────────────────
+
 [[filter.command_overrides]]
 match = "^git status"
 
   [[filter.command_overrides.rules]]
+  description = "Drop branch tracking info — redundant for agent context"
   type = "drop_matching"
-  pattern = "^On branch|^Your branch is up to date|^nothing to commit"
+  pattern = "^(On branch|Your branch is up to date|nothing to commit|no changes added)"
 
   [[filter.command_overrides.rules]]
+  description = "Drop blank lines between status sections"
+  type = "drop_matching"
+  pattern = "^\\s*$"
+
+  [[filter.command_overrides.rules]]
+  description = "Keep all file-change indicators and section headers"
   type = "keep_matching"
-  pattern = "^(modified:|deleted:|new file:|renamed:|both modified:|Changes|Untracked|Unmerged)"
+  pattern = "^(modified:|deleted:|new file:|renamed:|both modified:|both added:|both deleted:|Changes|Untracked|Unmerged|Your branch)"
   priority = 10
 
-# git log compression
+# ── git log ───────────────────────────────────────────────────────────────────
+
 [[filter.command_overrides]]
 match = "^git log"
 
   [[filter.command_overrides.rules]]
-  # Collapse commit hashes to 8 chars
+  description = "Shorten commit hashes to 8 characters for readability"
   type = "regex_replace"
-  pattern = "^commit ([0-9a-f]{40})"
-  replacement = "commit \\1[:8]"
+  pattern = "^commit ([0-9a-f]{8})[0-9a-f]{32}"
+  replacement = "commit \\1"
 
   [[filter.command_overrides.rules]]
+  description = "Drop Author and Date lines — usually not needed for agent summaries"
   type = "drop_matching"
   pattern = "^(Author:|Date:|Merge:)"
 
   [[filter.command_overrides.rules]]
+  description = "Keep commit hashes and message lines"
   type = "keep_matching"
-  pattern = "^(commit |    \\w)"
+  pattern = "^(commit [0-9a-f]|    \\S)"
   priority = 10
 
-# git diff compression
+# ── git diff ─────────────────────────────────────────────────────────────────
+
 [[filter.command_overrides]]
 match = "^git diff"
 
   [[filter.command_overrides.rules]]
+  description = "Drop internal blob index lines — carry no semantic meaning"
   type = "drop_matching"
   pattern = "^index [0-9a-f]+\\.\\.[0-9a-f]+"
 
   [[filter.command_overrides.rules]]
-  # Keep context lines and changed lines
+  description = "Keep hunk headers, changed lines, and file path lines"
   type = "keep_matching"
-  pattern = "^(@@|\\+|\\-|diff --git|--- |\\+\\+\\+ )"
+  pattern = "^(@@|\\+|\\-|diff --git|--- a/|\\+\\+\\+ b/)"
   priority = 10
+
+# ── git push / pull / fetch ───────────────────────────────────────────────────
+
+[[filter.command_overrides]]
+match = "^git (push|pull|fetch)"
+
+  [[filter.command_overrides.rules]]
+  description = "Drop counting/compressing progress lines"
+  type = "drop_matching"
+  pattern = "^(Counting objects:|Compressing objects:|Writing objects:|remote: Counting|remote: Compressing|remote: Enumerating)"
+
+  [[filter.command_overrides.rules]]
+  description = "Drop blank lines"
+  type = "drop_matching"
+  pattern = "^\\s*$"
+
+  [[filter.command_overrides.rules]]
+  description = "Keep branch update summaries, error lines, and remote messages"
+  type = "keep_matching"
+  pattern = "^(\\s*[0-9a-f]+\\.\\.\\.|To |From |Branch|ERROR|error:|\\[new|\\[rejected|\\[deleted|\\[ahead|remote:|hint:)"
+  priority = 10
+
+[filter.on_failure]
+[[filter.on_failure.rules]]
+description = "On failure, keep all lines to preserve the full error context for diagnosis"
+type = "keep_matching"
+pattern = "."
+priority = 1

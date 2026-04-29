@@ -1,0 +1,97 @@
+[filter]
+name = "kubectl"
+description = "Compress kubectl output, extracting key fields from JSON/YAML and keeping only actionable status information"
+
+[[filter.patterns]]
+match_command = "^kubectl\\s+(get|describe|apply|delete|logs|exec|rollout|scale|patch|create|edit|top|port-forward|cordon|drain|taint)"
+
+# ── kubectl get (JSON output) ─────────────────────────────────────────────────
+
+[[filter.command_overrides]]
+match = "^kubectl get .+-o json"
+
+  [[filter.command_overrides.rules]]
+  description = "Extract only actionable fields from kubectl JSON output"
+  type = "json_select"
+  fields = [
+    ".items[0].metadata.name",
+    ".items[0].status.phase",
+    ".items[0].status.conditions",
+    ".items[0].spec.containers",
+    ".metadata.name",
+    ".status.phase",
+    ".status.readyReplicas",
+    ".status.replicas",
+    ".status.conditions",
+  ]
+
+# ── kubectl get (table output) ────────────────────────────────────────────────
+
+[[filter.command_overrides]]
+match = "^kubectl get(?!.+-o json)"
+
+  [[filter.command_overrides.rules]]
+  description = "Drop blank lines from table output"
+  type = "drop_matching"
+  pattern = "^\\s*$"
+
+  [[filter.command_overrides.rules]]
+  description = "Keep header line, not-ready/error pods, and any pending/failed status"
+  type = "keep_matching"
+  pattern = "^(NAME|.*\\b(Error|OOMKilled|CrashLoop|ImagePull|Pending|Failed|Unknown|Terminating|NotReady)\\b)"
+  priority = 10
+
+# ── kubectl apply / delete ────────────────────────────────────────────────────
+
+[[filter.command_overrides]]
+match = "^kubectl (apply|delete|create|patch)"
+
+  [[filter.command_overrides.rules]]
+  description = "Drop blank lines"
+  type = "drop_matching"
+  pattern = "^\\s*$"
+
+  [[filter.command_overrides.rules]]
+  description = "Keep configured/created/deleted/unchanged resource lines and errors"
+  type = "keep_matching"
+  pattern = "^(.*\\s+(configured|created|deleted|unchanged|serverside-applied|unchanged)|Error|error:|Warning|The)"
+  priority = 10
+
+# ── kubectl logs ──────────────────────────────────────────────────────────────
+
+[[filter.command_overrides]]
+match = "^kubectl logs"
+
+  [[filter.command_overrides.rules]]
+  description = "Keep only the last 50 log lines — recent output is most relevant"
+  type = "tail"
+  lines = 50
+
+  [[filter.command_overrides.rules]]
+  description = "Drop routine health check and readiness probe log lines"
+  type = "drop_matching"
+  pattern = "\\b(GET /health|GET /ready|GET /ping|readinessProbe|livenessProbe)\\b"
+
+# ── kubectl describe ──────────────────────────────────────────────────────────
+
+[[filter.command_overrides]]
+match = "^kubectl describe"
+
+  [[filter.command_overrides.rules]]
+  description = "Keep name, namespace, status, conditions, events, and error sections"
+  type = "keep_matching"
+  pattern = "^(Name:|Namespace:|Status:|Conditions:|Events:|  Type|  Reason|  Age|  Message|  Warning|  Normal|Error|Labels:|Annotations:)"
+  priority = 10
+
+  [[filter.command_overrides.rules]]
+  description = "Collapse annotation dumps — usually very long and not needed"
+  type = "prefix_collapse"
+  prefix = "Annotations:"
+  max_lines = 3
+
+[filter.on_failure]
+[[filter.on_failure.rules]]
+description = "On failure, keep all error and event lines for cluster diagnosis"
+type = "keep_matching"
+pattern = "^(Error|error:|Warning|forbidden|not found|timeout|OOMKilled|CrashLoop|ImagePull|Pending|Events:)"
+priority = 5

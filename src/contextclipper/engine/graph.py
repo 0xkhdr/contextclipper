@@ -1,9 +1,21 @@
-"""Code graph indexer: builds and queries a SQLite-backed symbol/dependency graph."""
+"""Code graph indexer: builds and queries a SQLite-backed symbol/dependency graph.
+
+Supported languages (auto-detected by file extension):
+  - PHP (.php)        — classes, interfaces, traits, methods, functions
+  - Python (.py)      — classes, functions, methods, imports
+  - TypeScript (.ts, .tsx) — classes, interfaces, functions, arrow functions, imports
+  - JavaScript (.js, .jsx) — classes, functions, arrow functions
+
+Each language parser uses tree-sitter for accurate, syntax-aware extraction.
+Parsers are loaded lazily; missing grammars fall back to a regex-based extractor
+so the graph continues to work even when optional tree-sitter packages are absent.
+"""
 
 from __future__ import annotations
 
 import hashlib
 import os
+import re
 import sqlite3
 import threading
 import time
@@ -16,7 +28,21 @@ from .logging import get_logger
 
 log = get_logger()
 
-SKIP_DIRS = frozenset({"vendor", "node_modules", ".git", ".svn", "__pycache__", ".tox", "dist", "build"})
+SKIP_DIRS = frozenset({
+    "vendor", "node_modules", ".git", ".svn", "__pycache__",
+    ".tox", "dist", "build", ".venv", "venv", ".mypy_cache",
+    ".pytest_cache", "coverage", "target",
+})
+
+# Extension → language name
+_LANGUAGE_MAP: dict[str, str] = {
+    ".php": "php",
+    ".py": "python",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".js": "javascript",
+    ".jsx": "javascript",
+}
 
 SCHEMA = """
 PRAGMA journal_mode=WAL;
@@ -26,20 +52,21 @@ CREATE TABLE IF NOT EXISTS files (
     id       INTEGER PRIMARY KEY,
     path     TEXT    NOT NULL UNIQUE,
     sha256   TEXT    NOT NULL,
-    indexed  REAL    NOT NULL
+    indexed  REAL    NOT NULL,
+    language TEXT    NOT NULL DEFAULT 'unknown'
 );
 
 CREATE TABLE IF NOT EXISTS symbols (
     id       INTEGER PRIMARY KEY,
     file_id  INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-    kind     TEXT    NOT NULL,  -- class|interface|trait|method|function|property|constant
+    kind     TEXT    NOT NULL,
     name     TEXT    NOT NULL,
-    fqn      TEXT    NOT NULL,  -- fully qualified name
-    parent   TEXT,              -- parent class/interface FQN (for methods/properties)
+    fqn      TEXT    NOT NULL,
+    parent   TEXT,
     line_start INTEGER,
     line_end   INTEGER,
-    signature  TEXT,            -- signature only, no body
-    visibility TEXT,            -- public|protected|private
+    signature  TEXT,
+    visibility TEXT,
     is_static  INTEGER DEFAULT 0,
     is_abstract INTEGER DEFAULT 0
 );
@@ -47,7 +74,7 @@ CREATE TABLE IF NOT EXISTS symbols (
 CREATE TABLE IF NOT EXISTS dependencies (
     id         INTEGER PRIMARY KEY,
     file_id    INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-    kind       TEXT    NOT NULL,  -- extends|implements|use|call|import
+    kind       TEXT    NOT NULL,
     source_fqn TEXT    NOT NULL,
     target_fqn TEXT    NOT NULL
 );
@@ -59,6 +86,10 @@ CREATE INDEX IF NOT EXISTS idx_deps_source  ON dependencies(source_fqn);
 CREATE INDEX IF NOT EXISTS idx_deps_target  ON dependencies(target_fqn);
 CREATE INDEX IF NOT EXISTS idx_files_path   ON files(path);
 """
+
+_MIGRATIONS = [
+    "ALTER TABLE files ADD COLUMN language TEXT NOT NULL DEFAULT 'unknown'",
+]
 
 
 @dataclass
@@ -79,6 +110,7 @@ class Symbol:
 @dataclass
 class FileSummary:
     path: str
+    language: str
     symbols: list[Symbol]
     dependencies: list[tuple[str, str, str]]  # (kind, source_fqn, target_fqn)
 
@@ -91,17 +123,18 @@ def _sha256(path: Path) -> str:
     return h.hexdigest()
 
 
+# ── PHP parser ────────────────────────────────────────────────────────────────
+
 def _parse_php(source: bytes, file_path: str) -> FileSummary:
     """Parse a PHP file using tree-sitter and extract symbols/deps."""
     try:
         import tree_sitter_php as ts_php
         from tree_sitter import Language, Parser
 
-        # tree-sitter-php 0.23+ exposes language_php() for the PHP grammar
         PHP = Language(ts_php.language_php())
         parser = Parser(PHP)
     except Exception:
-        return FileSummary(path=file_path, symbols=[], dependencies=[])
+        return FileSummary(path=file_path, language="php", symbols=[], dependencies=[])
 
     tree = parser.parse(source)
     symbols: list[Symbol] = []
@@ -118,7 +151,6 @@ def _parse_php(source: bytes, file_path: str) -> FileSummary:
         return [c for c in node.children if c.type in types]
 
     def extract_namespace(node) -> str:  # type: ignore[no-untyped-def]
-        # namespace_definition has a "name" field
         name_node = node.child_by_field_name("name")
         if name_node:
             return node_text(name_node)
@@ -146,11 +178,10 @@ def _parse_php(source: bytes, file_path: str) -> FileSummary:
         return_type_node = node.child_by_field_name("return_type")
         return_type = node_text(return_type_node) if return_type_node else ""
         sig = f"{name}{params}{': ' + return_type if return_type else ''}"
-        child_fqn = f"{parent_fqn}::{name}"
         return Symbol(
             kind="method",
             name=name,
-            fqn=child_fqn,
+            fqn=f"{parent_fqn}::{name}",
             parent=parent_fqn,
             line_start=node.start_point[0] + 1,
             line_end=node.end_point[0] + 1,
@@ -166,24 +197,19 @@ def _parse_php(source: bytes, file_path: str) -> FileSummary:
             return None
         name = node_text(name_node)
         class_fqn = fqn(name)
-
-        # `base_clause` is a named child (not a field) on class_declaration
         for child in node.children:
             if child.type == "base_clause":
                 for c in child.children:
                     if c.type in ("name", "qualified_name", "namespace_name"):
                         deps.append(("extends", class_fqn, node_text(c)))
             elif child.type == "class_interface_clause":
-                # implements FooInterface, BarInterface
                 for c in child.children:
                     if c.type in ("name", "qualified_name", "namespace_name"):
                         deps.append(("implements", class_fqn, node_text(c)))
             elif child.type == "base_interface_clause":
-                # interface extends AnotherInterface
                 for c in child.children:
                     if c.type in ("name", "qualified_name", "namespace_name"):
                         deps.append(("extends", class_fqn, node_text(c)))
-
         sym = Symbol(
             kind=kind,
             name=name,
@@ -191,8 +217,6 @@ def _parse_php(source: bytes, file_path: str) -> FileSummary:
             line_start=node.start_point[0] + 1,
             line_end=node.end_point[0] + 1,
         )
-
-        # body — field name "body" returns the declaration_list
         body = node.child_by_field_name("body")
         if body:
             for member in body.children:
@@ -242,17 +266,334 @@ def _parse_php(source: bytes, file_path: str) -> FileSummary:
                 walk(child)
 
     walk(tree.root_node)
-    return FileSummary(path=file_path, symbols=symbols, dependencies=deps)
+    return FileSummary(path=file_path, language="php", symbols=symbols, dependencies=deps)
 
+
+# ── Python parser ─────────────────────────────────────────────────────────────
+
+def _parse_python(source: bytes, file_path: str) -> FileSummary:
+    """Parse a Python file using tree-sitter and extract symbols/deps."""
+    try:
+        import tree_sitter_python as ts_python
+        from tree_sitter import Language, Parser
+
+        PY = Language(ts_python.language())
+        parser = Parser(PY)
+    except Exception:
+        return _parse_python_regex(source, file_path)
+
+    tree = parser.parse(source)
+    symbols: list[Symbol] = []
+    deps: list[tuple[str, str, str]] = []
+
+    def node_text(node) -> str:  # type: ignore[no-untyped-def]
+        return source[node.start_byte:node.end_byte].decode("utf-8", errors="replace")
+
+    def extract_params(node) -> str:  # type: ignore[no-untyped-def]
+        params_node = node.child_by_field_name("parameters")
+        return node_text(params_node) if params_node else "()"
+
+    def extract_return_type(node) -> str:  # type: ignore[no-untyped-def]
+        rt = node.child_by_field_name("return_type")
+        return (": " + node_text(rt)) if rt else ""
+
+    def walk(node, parent_fqn: str = "") -> None:  # type: ignore[no-untyped-def]
+        if node.type == "class_definition":
+            name_node = node.child_by_field_name("name")
+            if not name_node:
+                return
+            name = node_text(name_node)
+            fqn = f"{parent_fqn}.{name}" if parent_fqn else name
+            # Extract superclasses
+            args = node.child_by_field_name("superclasses")
+            if args:
+                for arg in args.children:
+                    if arg.type in ("identifier", "attribute"):
+                        deps.append(("extends", fqn, node_text(arg)))
+            sym = Symbol(
+                kind="class",
+                name=name,
+                fqn=fqn,
+                parent=parent_fqn or None,
+                line_start=node.start_point[0] + 1,
+                line_end=node.end_point[0] + 1,
+            )
+            body = node.child_by_field_name("body")
+            if body:
+                for child in body.children:
+                    if child.type == "function_definition":
+                        mname_node = child.child_by_field_name("name")
+                        if mname_node:
+                            mname = node_text(mname_node)
+                            params = extract_params(child)
+                            rt = extract_return_type(child)
+                            visibility = "private" if mname.startswith("__") and not mname.endswith("__") else "public"
+                            sym.children.append(Symbol(
+                                kind="method",
+                                name=mname,
+                                fqn=f"{fqn}.{mname}",
+                                parent=fqn,
+                                line_start=child.start_point[0] + 1,
+                                line_end=child.end_point[0] + 1,
+                                signature=f"{mname}{params}{rt}",
+                                visibility=visibility,
+                            ))
+            symbols.append(sym)
+
+        elif node.type == "function_definition" and not parent_fqn:
+            # Top-level function
+            name_node = node.child_by_field_name("name")
+            if name_node:
+                name = node_text(name_node)
+                params = extract_params(node)
+                rt = extract_return_type(node)
+                symbols.append(Symbol(
+                    kind="function",
+                    name=name,
+                    fqn=name,
+                    line_start=node.start_point[0] + 1,
+                    line_end=node.end_point[0] + 1,
+                    signature=f"{name}{params}{rt}",
+                ))
+
+        elif node.type == "import_statement":
+            for child in node.children:
+                if child.type in ("dotted_name", "aliased_import"):
+                    deps.append(("import", "", node_text(child)))
+
+        elif node.type == "import_from_statement":
+            module_node = node.child_by_field_name("module_name")
+            if module_node:
+                deps.append(("import", "", node_text(module_node)))
+
+        else:
+            for child in node.children:
+                walk(child, parent_fqn)
+
+    for child in tree.root_node.children:
+        walk(child)
+
+    return FileSummary(path=file_path, language="python", symbols=symbols, dependencies=deps)
+
+
+def _parse_python_regex(source: bytes, file_path: str) -> FileSummary:
+    """Regex-based Python fallback when tree-sitter-python is not available."""
+    text = source.decode("utf-8", errors="replace")
+    symbols: list[Symbol] = []
+    deps: list[tuple[str, str, str]] = []
+
+    class_re = re.compile(r"^class\s+(\w+)(?:\((.*?)\))?:", re.MULTILINE)
+    func_re = re.compile(r"^def\s+(\w+)\s*(\([^)]*\))\s*(?:->.*?)?:", re.MULTILINE)
+    import_re = re.compile(r"^(?:import|from)\s+([\w.]+)", re.MULTILINE)
+
+    lines = text.splitlines()
+    line_starts = [0]
+    for ln in lines:
+        line_starts.append(line_starts[-1] + len(ln) + 1)
+
+    def byte_to_line(pos: int) -> int:
+        for i, start in enumerate(line_starts):
+            if start > pos:
+                return i
+        return len(lines)
+
+    for m in class_re.finditer(text):
+        name = m.group(1)
+        sym = Symbol(kind="class", name=name, fqn=name, line_start=byte_to_line(m.start()))
+        if m.group(2):
+            for base in m.group(2).split(","):
+                b = base.strip()
+                if b:
+                    deps.append(("extends", name, b))
+        symbols.append(sym)
+
+    for m in func_re.finditer(text):
+        name, params = m.group(1), m.group(2)
+        symbols.append(Symbol(
+            kind="function", name=name, fqn=name,
+            line_start=byte_to_line(m.start()),
+            signature=f"{name}{params}",
+        ))
+
+    for m in import_re.finditer(text):
+        deps.append(("import", "", m.group(1)))
+
+    return FileSummary(path=file_path, language="python", symbols=symbols, dependencies=deps)
+
+
+# ── TypeScript / JavaScript parser ────────────────────────────────────────────
+
+def _parse_typescript(source: bytes, file_path: str, language: str = "typescript") -> FileSummary:
+    """Parse a TypeScript/JavaScript file using tree-sitter and extract symbols/deps."""
+    try:
+        if language == "typescript":
+            import tree_sitter_typescript as ts_ts
+            from tree_sitter import Language, Parser
+            LANG = Language(ts_ts.language_typescript())
+        else:
+            import tree_sitter_javascript as ts_js  # type: ignore[import-not-found]
+            from tree_sitter import Language, Parser
+            LANG = Language(ts_js.language())
+        parser = Parser(LANG)
+    except Exception:
+        return _parse_typescript_regex(source, file_path, language)
+
+    tree = parser.parse(source)
+    symbols: list[Symbol] = []
+    deps: list[tuple[str, str, str]] = []
+
+    def node_text(node) -> str:  # type: ignore[no-untyped-def]
+        return source[node.start_byte:node.end_byte].decode("utf-8", errors="replace")
+
+    def walk(node, parent_fqn: str = "") -> None:  # type: ignore[no-untyped-def]
+        if node.type in ("class_declaration", "abstract_class_declaration", "class"):
+            name_node = node.child_by_field_name("name")
+            name = node_text(name_node) if name_node else "<anonymous>"
+            fqn = f"{parent_fqn}.{name}" if parent_fqn else name
+            # Heritage (extends / implements)
+            heritage = node.child_by_field_name("class_heritage")
+            if heritage:
+                for h in heritage.children:
+                    if h.type in ("extends_clause", "implements_clause"):
+                        for c in h.children:
+                            if c.type == "type_identifier":
+                                kind = "extends" if "extends" in node_text(h)[:10] else "implements"
+                                deps.append((kind, fqn, node_text(c)))
+            sym = Symbol(
+                kind="class",
+                name=name,
+                fqn=fqn,
+                parent=parent_fqn or None,
+                line_start=node.start_point[0] + 1,
+                line_end=node.end_point[0] + 1,
+            )
+            body = node.child_by_field_name("body")
+            if body:
+                for child in body.children:
+                    if child.type in ("method_definition", "public_field_definition"):
+                        mname_node = child.child_by_field_name("name")
+                        if mname_node:
+                            mname = node_text(mname_node)
+                            params_node = child.child_by_field_name("parameters")
+                            params = node_text(params_node) if params_node else "()"
+                            sym.children.append(Symbol(
+                                kind="method",
+                                name=mname,
+                                fqn=f"{fqn}.{mname}",
+                                parent=fqn,
+                                line_start=child.start_point[0] + 1,
+                                line_end=child.end_point[0] + 1,
+                                signature=f"{mname}{params}",
+                            ))
+            symbols.append(sym)
+
+        elif node.type == "interface_declaration":
+            name_node = node.child_by_field_name("name")
+            if name_node:
+                name = node_text(name_node)
+                symbols.append(Symbol(
+                    kind="interface",
+                    name=name,
+                    fqn=name,
+                    line_start=node.start_point[0] + 1,
+                    line_end=node.end_point[0] + 1,
+                ))
+
+        elif node.type in ("function_declaration", "function") and not parent_fqn:
+            name_node = node.child_by_field_name("name")
+            if name_node:
+                name = node_text(name_node)
+                params_node = node.child_by_field_name("parameters")
+                params = node_text(params_node) if params_node else "()"
+                symbols.append(Symbol(
+                    kind="function",
+                    name=name,
+                    fqn=name,
+                    line_start=node.start_point[0] + 1,
+                    line_end=node.end_point[0] + 1,
+                    signature=f"{name}{params}",
+                ))
+
+        elif node.type == "import_statement":
+            src_node = node.child_by_field_name("source")
+            if src_node:
+                deps.append(("import", "", node_text(src_node).strip("'\"")))
+
+        elif node.type == "export_statement":
+            for child in node.children:
+                walk(child, parent_fqn)
+
+        else:
+            for child in node.children:
+                walk(child, parent_fqn)
+
+    for child in tree.root_node.children:
+        walk(child)
+
+    return FileSummary(path=file_path, language=language, symbols=symbols, dependencies=deps)
+
+
+def _parse_typescript_regex(source: bytes, file_path: str, language: str) -> FileSummary:
+    """Regex-based TypeScript/JavaScript fallback."""
+    text = source.decode("utf-8", errors="replace")
+    symbols: list[Symbol] = []
+    deps: list[tuple[str, str, str]] = []
+
+    class_re = re.compile(r"(?:export\s+)?(?:abstract\s+)?class\s+(\w+)", re.MULTILINE)
+    iface_re = re.compile(r"(?:export\s+)?interface\s+(\w+)", re.MULTILINE)
+    func_re = re.compile(r"(?:export\s+)?(?:async\s+)?function\s+(\w+)\s*(\([^)]*\))", re.MULTILINE)
+    import_re = re.compile(r"""(?:import|from)\s+['"]([^'"]+)['"]""", re.MULTILINE)
+
+    lines = text.splitlines()
+
+    def byte_to_line(pos: int) -> int:
+        return text[:pos].count("\n") + 1
+
+    for m in class_re.finditer(text):
+        symbols.append(Symbol(kind="class", name=m.group(1), fqn=m.group(1),
+                              line_start=byte_to_line(m.start())))
+    for m in iface_re.finditer(text):
+        symbols.append(Symbol(kind="interface", name=m.group(1), fqn=m.group(1),
+                              line_start=byte_to_line(m.start())))
+    for m in func_re.finditer(text):
+        name, params = m.group(1), m.group(2)
+        symbols.append(Symbol(kind="function", name=name, fqn=name,
+                              line_start=byte_to_line(m.start()),
+                              signature=f"{name}{params}"))
+    for m in import_re.finditer(text):
+        deps.append(("import", "", m.group(1)))
+
+    return FileSummary(path=file_path, language=language, symbols=symbols, dependencies=deps)
+
+
+# ── Dispatcher ────────────────────────────────────────────────────────────────
+
+def _parse_file(source: bytes, file_path: str, language: str) -> FileSummary:
+    """Dispatch to the right parser based on language."""
+    if language == "php":
+        return _parse_php(source, file_path)
+    elif language == "python":
+        return _parse_python(source, file_path)
+    elif language in ("typescript", "javascript"):
+        return _parse_typescript(source, file_path, language)
+    return FileSummary(path=file_path, language=language, symbols=[], dependencies=[])
+
+
+# ── GraphDB ───────────────────────────────────────────────────────────────────
 
 class GraphDB:
-    """Persistent code graph backed by SQLite with WAL mode."""
+    """Persistent multi-language code graph backed by SQLite with WAL mode."""
 
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
         db_path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(db_path), check_same_thread=False)
         self._conn.executescript(SCHEMA)
+        for stmt in _MIGRATIONS:
+            try:
+                self._conn.execute(stmt)
+            except sqlite3.OperationalError:
+                pass
         self._conn.commit()
         self._write_lock = threading.RLock()
 
@@ -288,12 +629,12 @@ class GraphDB:
                 cur.close()
 
     def build(self, project_root: Path, force: bool = False) -> dict[str, int]:
-        """Walk project_root and index all PHP files. Returns counts."""
+        """Walk project_root and index all supported source files. Returns counts."""
         t0 = time.monotonic()
-        counts = {"new": 0, "updated": 0, "skipped": 0, "total": 0}
-        php_files = list(self._walk_php(project_root))
-        counts["total"] = len(php_files)
-        for path in php_files:
+        counts: dict[str, int] = {"new": 0, "updated": 0, "skipped": 0, "total": 0}
+        source_files = list(self._walk_sources(project_root))
+        counts["total"] = len(source_files)
+        for path, language in source_files:
             rel = str(path.relative_to(project_root))
             sha = _sha256(path)
             with self._tx() as cur:
@@ -303,15 +644,21 @@ class GraphDB:
                     counts["skipped"] += 1
                     continue
                 source = path.read_bytes()
-                summary = _parse_php(source, rel)
+                summary = _parse_file(source, rel, language)
                 if row:
                     file_id = row[0]
-                    cur.execute("UPDATE files SET sha256=?, indexed=? WHERE id=?", (sha, time.time(), file_id))
+                    cur.execute(
+                        "UPDATE files SET sha256=?, indexed=?, language=? WHERE id=?",
+                        (sha, time.time(), language, file_id),
+                    )
                     cur.execute("DELETE FROM symbols WHERE file_id=?", (file_id,))
                     cur.execute("DELETE FROM dependencies WHERE file_id=?", (file_id,))
                     counts["updated"] += 1
                 else:
-                    cur.execute("INSERT INTO files(path, sha256, indexed) VALUES(?,?,?)", (rel, sha, time.time()))
+                    cur.execute(
+                        "INSERT INTO files(path, sha256, indexed, language) VALUES(?,?,?,?)",
+                        (rel, sha, time.time(), language),
+                    )
                     file_id = cur.lastrowid
                     counts["new"] += 1
                 self._insert_file_data(cur, file_id, summary)
@@ -337,12 +684,14 @@ class GraphDB:
                 (file_id, kind, src, tgt),
             )
 
-    def _walk_php(self, root: Path) -> Generator[Path, None, None]:
+    def _walk_sources(self, root: Path) -> Generator[tuple[Path, str], None, None]:
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".")]
             for fname in filenames:
-                if fname.endswith(".php"):
-                    yield Path(dirpath) / fname
+                ext = Path(fname).suffix.lower()
+                lang = _LANGUAGE_MAP.get(ext)
+                if lang:
+                    yield Path(dirpath) / fname, lang
 
     def get_file_symbols(
         self,
@@ -351,11 +700,11 @@ class GraphDB:
     ) -> str:
         """Return Markdown description of a file's symbols."""
         with self._tx() as cur:
-            cur.execute("SELECT id, sha256 FROM files WHERE path = ?", (path,))
+            cur.execute("SELECT id, sha256, language FROM files WHERE path = ?", (path,))
             row = cur.fetchone()
             if not row:
                 return f"File `{path}` not indexed. Run `ctxclp build` first."
-            file_id = row[0]
+            file_id, _, lang = row
             cur.execute(
                 "SELECT kind, name, fqn, parent, line_start, line_end, signature, visibility, is_static, is_abstract "
                 "FROM symbols WHERE file_id=? ORDER BY line_start",
@@ -367,54 +716,60 @@ class GraphDB:
                 (file_id,),
             )
             deps = cur.fetchall()
-        return self._format_file_symbols(path, syms, deps, mode)
+        return self._format_file_symbols(path, lang, syms, deps, mode)
 
     def _format_file_symbols(
         self,
         path: str,
+        language: str,
         syms: list,
         deps: list,
         mode: str,
     ) -> str:
-        lines = [f"## `{path}`"]
-        top_level = [s for s in syms if s[3] is None or "::" not in s[2]]
+        lines = [f"## `{path}` ({language})"]
+        top_level = [s for s in syms if s[3] is None or ("::" not in s[2] and "." not in s[2].split(s[1])[0])]
         for s in top_level:
             kind, name, fqn, parent, ls, le, sig, vis, is_static, is_abstract = s
             if kind in ("class", "interface", "trait"):
                 prefix = "abstract " if is_abstract else ""
                 lines.append(f"\n### {prefix}{kind} `{name}` (line {ls}–{le})")
-                # children
                 children = [c for c in syms if c[3] == fqn]
                 for c in children:
                     ck, cn, cfqn, cp, cls, cle, csig, cvis, cis_static, _ = c
                     static_kw = "static " if cis_static else ""
+                    vis_prefix = f"{cvis} " if cvis != "public" else ""
                     if mode == "summary_only":
-                        lines.append(f"  - `{cvis} {static_kw}{csig or cn}` (line {cls})")
+                        lines.append(f"  - `{vis_prefix}{static_kw}{csig or cn}` (line {cls})")
                     else:
-                        lines.append(f"  - [{cvis} {static_kw}{ck}] `{csig or cn}` lines {cls}–{cle}")
+                        lines.append(f"  - [{vis_prefix}{static_kw}{ck}] `{csig or cn}` lines {cls}–{cle}")
             elif kind == "function":
-                lines.append(f"\n### function `{name}` (line {ls}–{le})")
+                lines.append(f"\n### function `{sig or name}` (line {ls}–{le})")
         if deps:
             lines.append("\n**Dependencies:**")
-            for dk, src, tgt in deps:
+            for dk, src, tgt in deps[:20]:
                 lines.append(f"  - {dk}: `{tgt}`")
+            if len(deps) > 20:
+                lines.append(f"  - … {len(deps) - 20} more")
         return "\n".join(lines)
 
     def search_symbols(self, query: str, kind: str | None = None) -> list[dict]:
         with self._tx() as cur:
             if kind:
                 cur.execute(
-                    "SELECT f.path, s.kind, s.name, s.fqn, s.line_start FROM symbols s "
+                    "SELECT f.path, f.language, s.kind, s.name, s.fqn, s.line_start FROM symbols s "
                     "JOIN files f ON f.id=s.file_id WHERE s.kind=? AND (s.name LIKE ? OR s.fqn LIKE ?) LIMIT 50",
                     (kind, f"%{query}%", f"%{query}%"),
                 )
             else:
                 cur.execute(
-                    "SELECT f.path, s.kind, s.name, s.fqn, s.line_start FROM symbols s "
+                    "SELECT f.path, f.language, s.kind, s.name, s.fqn, s.line_start FROM symbols s "
                     "JOIN files f ON f.id=s.file_id WHERE s.name LIKE ? OR s.fqn LIKE ? LIMIT 50",
                     (f"%{query}%", f"%{query}%"),
                 )
-            return [{"path": r[0], "kind": r[1], "name": r[2], "fqn": r[3], "line": r[4]} for r in cur.fetchall()]
+            return [
+                {"path": r[0], "language": r[1], "kind": r[2], "name": r[3], "fqn": r[4], "line": r[5]}
+                for r in cur.fetchall()
+            ]
 
     def get_affected(self, files: list[str]) -> dict[str, list[str]]:
         """Return files/symbols that depend on the given set of files."""
@@ -426,7 +781,6 @@ class GraphDB:
                 if not row:
                     continue
                 file_id = row[0]
-                # Get both short name and FQN for matching — deps may store either
                 cur.execute(
                     "SELECT name, fqn FROM symbols WHERE file_id=? AND kind IN ('class','interface','trait')",
                     (file_id,),
@@ -450,25 +804,30 @@ class GraphDB:
             file_count = cur.fetchone()[0]
             cur.execute("SELECT COUNT(*) FROM symbols WHERE kind='class'")
             class_count = cur.fetchone()[0]
-            cur.execute("SELECT COUNT(*) FROM symbols WHERE kind='method'")
+            cur.execute("SELECT COUNT(*) FROM symbols WHERE kind IN ('method', 'function')")
             method_count = cur.fetchone()[0]
+            # Language breakdown
+            cur.execute("SELECT language, COUNT(*) FROM files GROUP BY language ORDER BY COUNT(*) DESC")
+            lang_counts = cur.fetchall()
             if detail == "compact":
                 cur.execute(
-                    "SELECT f.path, s.name, s.kind FROM files f "
-                    "JOIN symbols s ON s.file_id=f.id AND s.kind IN ('class','interface','trait') "
+                    "SELECT f.path, f.language, s.name, s.kind FROM files f "
+                    "JOIN symbols s ON s.file_id=f.id AND s.kind IN ('class','interface','trait','function') "
                     "ORDER BY f.path LIMIT 200"
                 )
                 rows = cur.fetchall()
+
+        lang_summary = ", ".join(f"{lang}: {n}" for lang, n in lang_counts)
         lines = [
             "# Project Overview",
-            f"Files indexed: {file_count} | Classes: {class_count} | Methods: {method_count}",
+            f"Files: {file_count} ({lang_summary}) | Classes: {class_count} | Methods/Functions: {method_count}",
             "",
         ]
         if detail == "compact":
-            cur_file = None
-            for path, sname, skind in rows:
+            cur_file: str | None = None
+            for path, lang, sname, skind in rows:
                 if path != cur_file:
-                    lines.append(f"\n**{path}**")
+                    lines.append(f"\n**{path}** ({lang})")
                     cur_file = path
                 lines.append(f"  - {skind} `{sname}`")
         return "\n".join(lines)

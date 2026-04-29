@@ -1,0 +1,89 @@
+[filter]
+name = "make"
+description = "Compress Make/CMake build output, keeping only errors, warnings, and build completion messages"
+
+[[filter.patterns]]
+match_command = "^(make|cmake|ninja|gmake)\\b"
+
+# ── make ─────────────────────────────────────────────────────────────────────
+
+[[filter.command_overrides]]
+match = "^(make|gmake)"
+
+  [[filter.command_overrides.rules]]
+  description = "Collapse long blocks of compiler invocation lines (cc, g++, clang)"
+  type = "prefix_collapse"
+  prefix = "cc "
+  max_lines = 3
+
+  [[filter.command_overrides.rules]]
+  description = "Collapse g++ compilation lines"
+  type = "prefix_collapse"
+  prefix = "g++ "
+  max_lines = 3
+
+  [[filter.command_overrides.rules]]
+  description = "Collapse clang compilation lines"
+  type = "prefix_collapse"
+  prefix = "clang "
+  max_lines = 3
+
+  [[filter.command_overrides.rules]]
+  description = "Drop blank lines"
+  type = "drop_matching"
+  pattern = "^\\s*$"
+
+  [[filter.command_overrides.rules]]
+  description = "Keep error and warning lines, linking steps, and make target summaries"
+  type = "keep_matching"
+  pattern = "^(.*: error:|.*: warning:|Linking|make\\[|make:|\\[\\d+%\\]|Built target|Error \\d+|Leaving directory|Entering directory)"
+  priority = 10
+
+# ── cmake ─────────────────────────────────────────────────────────────────────
+
+[[filter.command_overrides]]
+match = "^cmake"
+
+  [[filter.command_overrides.rules]]
+  description = "Drop CMake status/check lines — informational only"
+  type = "drop_matching"
+  pattern = "^-- "
+
+  [[filter.command_overrides.rules]]
+  description = "Drop blank lines"
+  type = "drop_matching"
+  pattern = "^\\s*$"
+
+  [[filter.command_overrides.rules]]
+  description = "Keep error, warning, and build configuration result lines"
+  type = "keep_matching"
+  pattern = "^(CMake Error|CMake Warning|Configuring done|Generating done|Build files have been written|Error)"
+  priority = 10
+
+# ── ninja ─────────────────────────────────────────────────────────────────────
+
+[[filter.command_overrides]]
+match = "^ninja"
+
+  [[filter.command_overrides.rules]]
+  description = "Drop per-file compilation progress lines"
+  type = "drop_matching"
+  pattern = "^\\[\\d+/\\d+\\] (Building|Linking|Compiling) "
+
+  [[filter.command_overrides.rules]]
+  description = "Drop blank lines"
+  type = "drop_matching"
+  pattern = "^\\s*$"
+
+  [[filter.command_overrides.rules]]
+  description = "Keep error and warning lines"
+  type = "keep_matching"
+  pattern = "^(FAILED:|ninja:|.*error:|.*warning:)"
+  priority = 10
+
+[filter.on_failure]
+[[filter.on_failure.rules]]
+description = "On failure, keep all error output and make target that failed"
+type = "keep_matching"
+pattern = "^(.*: error:|.*: warning:|make|FAILED:|Error \\d+|recipe for target)"
+priority = 5

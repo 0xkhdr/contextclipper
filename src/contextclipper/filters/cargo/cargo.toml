@@ -1,0 +1,81 @@
+[filter]
+name = "cargo"
+description = "Compress Rust Cargo output (build, test, clippy, check), keeping only errors, warnings, and test failures"
+
+[[filter.patterns]]
+match_command = "^cargo\\s+(build|test|check|clippy|run|bench|fmt|publish|install)"
+
+# ── cargo build / check / clippy ──────────────────────────────────────────────
+
+[[filter.command_overrides]]
+match = "^cargo (build|check|clippy)"
+
+  [[filter.command_overrides.rules]]
+  description = "Drop per-crate compiling progress lines"
+  type = "drop_matching"
+  pattern = "^\\s*Compiling "
+
+  [[filter.command_overrides.rules]]
+  description = "Drop 'Downloading' and 'Unpacking' crate lines"
+  type = "drop_matching"
+  pattern = "^\\s*(Downloading|Unpacking|Updating|Blocking) "
+
+  [[filter.command_overrides.rules]]
+  description = "Drop blank lines"
+  type = "drop_matching"
+  pattern = "^\\s*$"
+
+  [[filter.command_overrides.rules]]
+  description = "Keep error lines, warning lines, finished/failed summary, and help suggestions"
+  type = "keep_matching"
+  pattern = "^(error|warning|   = |   \\|>?|    |  --> |error\\[|warning\\[|\\s*Finished|\\s*error\\[E)"
+  priority = 10
+
+  [[filter.command_overrides.rules]]
+  description = "Keep the 'Finished' or 'error[...]' summary line"
+  type = "keep_matching"
+  pattern = "^\\s*(Finished|error\\[|aborting due to)"
+  priority = 15
+
+# ── cargo test ────────────────────────────────────────────────────────────────
+
+[[filter.command_overrides]]
+match = "^cargo test"
+
+  [[filter.command_overrides.rules]]
+  description = "Drop per-crate compiling lines during test build"
+  type = "drop_matching"
+  pattern = "^\\s*Compiling "
+
+  [[filter.command_overrides.rules]]
+  description = "Drop passing test ok lines"
+  type = "drop_matching"
+  pattern = "^test .+ \\.\\.\\.\\s+ok$"
+
+  [[filter.command_overrides.rules]]
+  description = "Drop the 'running N tests' header"
+  type = "drop_matching"
+  pattern = "^running \\d+ test"
+
+  [[filter.command_overrides.rules]]
+  description = "Keep FAILED test lines, test result summaries, and panic output"
+  type = "keep_matching"
+  pattern = "^(test .+ FAILED|test result:|FAILED|thread 'main' panicked|note:|failures:)"
+  priority = 10
+
+# ── cargo fmt ─────────────────────────────────────────────────────────────────
+
+[[filter.command_overrides]]
+match = "^cargo fmt"
+
+  [[filter.command_overrides.rules]]
+  description = "Drop blank lines from fmt output"
+  type = "drop_matching"
+  pattern = "^\\s*$"
+
+[filter.on_failure]
+[[filter.on_failure.rules]]
+description = "On failure, keep all error detail lines including spans and help text"
+type = "keep_matching"
+pattern = "^(error|warning|   = |   \\||  --> |help:|note:|\\s+|failures:)"
+priority = 5

@@ -7,8 +7,10 @@ Public API (stable, backwards-compatible):
                       strategy=None) -> CompressionResult``
   - ``CompressionResult`` — data class with ``compressed``, ``original_lines``,
     ``kept_lines``, ``raw_output_id``, ``elapsed_ms``, plus ``removed_lines``
-    (set when ``dry_run=True``) and ``truncated`` (set when input exceeded
-    ``max_input_bytes`` and was truncated).
+    (set when ``dry_run=True``), ``truncated`` (set when input exceeded
+    ``max_input_bytes`` and was truncated), and ``is_structured`` (True when
+    the compressed output is valid JSON, so callers can route metadata to
+    stderr rather than appending it to content).
   - ``FilterRegistry`` — thread-safe registry. ``validate()`` runs a self-check
     over all loaded filters and returns problems found.
   - ``register_strategy(name, fn)`` / ``unregister_strategy(name)`` — install a
@@ -27,6 +29,7 @@ Security & robustness notes:
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import threading
@@ -44,6 +47,16 @@ except ImportError:
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07")
 BUILTIN_FILTERS_DIR = Path(__file__).parent.parent / "filters"
+
+# Patterns that strongly suggest a line is an error/warning — used for safety analysis.
+_ERROR_SIGNALS = re.compile(
+    r"\b(error|ERROR|Error|FAIL|failed|FAILED|exception|Exception|traceback|Traceback"
+    r"|panic|PANIC|fatal|FATAL|critical|CRITICAL|assertion|AssertionError)\b",
+    re.IGNORECASE,
+)
+
+# A drop_matching pattern that catches virtually everything is dangerous.
+_CATCH_ALL_PATTERNS = re.compile(r"^\.\*$|^\.\+$|^\^?\.\*\$?$")
 
 
 def _user_config_dir() -> Path:
@@ -109,6 +122,13 @@ class CompressionResult:
     strategy_name: str | None = None
     bytes_in: int = 0
     bytes_out: int = 0
+    is_structured: bool = False
+    """True when the compressed output is valid JSON — callers should route
+    the ctxclp metadata footer to stderr instead of appending it to content."""
+    filter_name: str | None = None
+    """Name of the matched filter, or None for the generic fallback."""
+    dropped_error_lines: list[str] | None = None
+    """Lines containing error signals that were dropped (populated for safety analysis)."""
 
     @property
     def reduction_pct(self) -> float:
@@ -116,19 +136,30 @@ class CompressionResult:
             return 0.0
         return round((1 - self.kept_lines / self.original_lines) * 100, 1)
 
-    def __str__(self) -> str:
-        footer = f"\n[ctxclp: {self.kept_lines}/{self.original_lines} lines, -{self.reduction_pct}% tokens"
+    def metadata_footer(self) -> str:
+        """Return the metadata footer line (never includes newline)."""
+        parts = [f"{self.kept_lines}/{self.original_lines} lines, -{self.reduction_pct}% tokens"]
         if self.raw_output_id:
-            footer += f" | raw_id={self.raw_output_id}"
+            parts.append(f"raw_id={self.raw_output_id}")
+            parts.append(f"fetch: ctxclp fetch {self.raw_output_id}")
         if self.truncated:
-            footer += " | truncated"
-        footer += "]"
-        return self.compressed + footer
+            parts.append("truncated")
+        if self.filter_name:
+            parts.append(f"filter={self.filter_name}")
+        return "[ctxclp: " + " | ".join(parts) + "]"
+
+    def __str__(self) -> str:
+        # Never append the metadata footer inline for structured (JSON) output
+        # so that callers reading stdout as JSON don't see a corrupt trailing line.
+        if self.is_structured:
+            return self.compressed
+        return self.compressed + "\n" + self.metadata_footer()
 
 
 @dataclass
 class FilterRule:
     type: str
+    description: str = ""
     pattern: str | None = None
     replacement: str | None = None
     prefix: str | None = None
@@ -137,6 +168,8 @@ class FilterRule:
     priority: int = 0
     start_pattern: str | None = None
     end_pattern: str | None = None
+    fields: list[str] = field(default_factory=list)
+    """For ``json_select`` rules: jq-style dot-paths to extract (e.g. ``.status.phase``)."""
     _compiled: re.Pattern | None = field(default=None, init=False, repr=False)
     _compiled_start: re.Pattern | None = field(default=None, init=False, repr=False)
     _compiled_end: re.Pattern | None = field(default=None, init=False, repr=False)
@@ -176,6 +209,7 @@ def _load_rules(raw_rules: list[dict]) -> list[FilterRule]:
     for r in raw_rules:
         rules.append(FilterRule(
             type=r.get("type", "drop_matching"),
+            description=r.get("description", ""),
             pattern=r.get("pattern"),
             replacement=r.get("replacement"),
             prefix=r.get("prefix"),
@@ -184,6 +218,7 @@ def _load_rules(raw_rules: list[dict]) -> list[FilterRule]:
             priority=int(r.get("priority", 0)),
             start_pattern=r.get("start_pattern"),
             end_pattern=r.get("end_pattern"),
+            fields=list(r.get("fields", [])),
         ))
     return rules
 
@@ -279,16 +314,25 @@ class FilterRegistry:
             return list(self._filters)
 
     def validate(self) -> dict[str, Any]:
-        """Self-check: every loaded filter has at least one pattern and rules.
+        """Self-check: every loaded filter has at least one pattern, rules, and descriptions.
 
-        Returns ``{"ok": bool, "filters": int, "problems": [...]}``. Used by the
-        ``ctxclp validate`` CLI command and by health-check probes.
+        Returns ``{"ok": bool, "filters": int, "problems": [...], "warnings": [...]}``.
+        Used by the ``ctxclp validate`` and ``ctxclp doctor`` CLI commands.
         """
         self._ensure_loaded()
         problems: list[str] = []
+        warnings: list[str] = []
+
+        valid_types = {
+            "drop_matching", "keep_matching", "regex_replace",
+            "tail", "head", "keep_section", "prefix_collapse", "json_select",
+        }
+
         for flt in self._filters:
             if not flt.match_patterns:
                 problems.append(f"{flt.name}: no match_command patterns")
+            if not flt.description:
+                warnings.append(f"{flt.name}: missing filter-level description")
             if (
                 not flt.rules
                 and not flt.command_overrides
@@ -296,16 +340,13 @@ class FilterRegistry:
                 and not flt.on_failure_rules
             ):
                 problems.append(f"{flt.name}: no rules / overrides / strategy")
-            for r in flt.rules + flt.on_failure_rules:
-                if r.type not in (
-                    "drop_matching",
-                    "keep_matching",
-                    "regex_replace",
-                    "tail",
-                    "head",
-                    "keep_section",
-                    "prefix_collapse",
-                ):
+
+            all_rules = flt.rules + flt.on_failure_rules
+            for ov in flt.command_overrides:
+                all_rules = all_rules + ov.get("rules", [])
+
+            for r in all_rules:
+                if r.type not in valid_types:
                     problems.append(f"{flt.name}: unknown rule type {r.type!r}")
                 if r.type in ("drop_matching", "keep_matching") and not r._compiled:
                     problems.append(f"{flt.name}: rule {r.type} missing compiled pattern")
@@ -313,7 +354,68 @@ class FilterRegistry:
                     problems.append(f"{flt.name}: regex_replace missing pattern/replacement")
                 if r.type == "keep_section" and not (r._compiled_start and r._compiled_end):
                     problems.append(f"{flt.name}: keep_section needs start_pattern and end_pattern")
-        return {"ok": not problems, "filters": len(self._filters), "problems": problems}
+                if r.type == "json_select" and not r.fields:
+                    problems.append(f"{flt.name}: json_select rule has no fields defined")
+                if not r.description:
+                    warnings.append(f"{flt.name}: rule {r.type!r} has no description")
+                # Detect dangerously broad drop patterns
+                if r.type == "drop_matching" and r.pattern and _CATCH_ALL_PATTERNS.match(r.pattern):
+                    problems.append(
+                        f"{flt.name}: drop_matching pattern {r.pattern!r} matches everything — "
+                        "this will drop all output"
+                    )
+
+        return {
+            "ok": not problems,
+            "filters": len(self._filters),
+            "problems": problems,
+            "warnings": warnings,
+        }
+
+    def safety_check(self, command: str, output: str) -> dict[str, Any]:
+        """Check if the filter for ``command`` would drop any error-signal lines.
+
+        Returns a dict with ``safety_score`` (0–10), ``error_lines_dropped``,
+        ``error_lines_kept``, and ``recommendation``. Used by ``ctxclp filter test``.
+        """
+        flt = self.find(command)
+        lines = output.splitlines()
+        error_lines = [ln for ln in lines if _ERROR_SIGNALS.search(ln)]
+
+        if not lines:
+            return {"safety_score": 10, "error_lines_dropped": [], "error_lines_kept": [], "recommendation": ""}
+
+        # Apply the filter
+        if flt:
+            rules = _find_override(flt, command) or flt.rules
+            kept_set = set(_apply_rules(lines, rules))
+        else:
+            kept_set = {ln for ln in lines if ln.strip()}
+
+        kept_errors = [ln for ln in error_lines if ln in kept_set]
+        dropped_errors = [ln for ln in error_lines if ln not in kept_set]
+
+        if not error_lines:
+            score = 10
+            rec = "No error-signal lines found in sample output."
+        elif not dropped_errors:
+            score = 10
+            rec = "All error-signal lines are preserved."
+        else:
+            pct_kept = len(kept_errors) / len(error_lines)
+            score = round(pct_kept * 10, 1)
+            rec = (
+                f"Consider adding a keep_matching rule with high priority for error patterns. "
+                f"{len(dropped_errors)} error-signal line(s) would be dropped."
+            )
+
+        return {
+            "safety_score": score,
+            "error_lines_dropped": dropped_errors[:20],
+            "error_lines_kept": kept_errors[:20],
+            "recommendation": rec,
+            "filter_used": flt.name if flt else "generic-fallback",
+        }
 
 
 _registry = FilterRegistry()
@@ -335,11 +437,58 @@ def _enforce_input_bounds(text: str) -> tuple[str, bool]:
     encoded_len = len(text.encode("utf-8", errors="replace"))
     if encoded_len <= MAX_INPUT_BYTES:
         return text, False
-    # Slice by chars approximating the byte cap (UTF-8 is variable-width;
-    # using char index for speed and acknowledging slight overshoot is fine).
-    safe_chars = MAX_INPUT_BYTES  # at least 1 byte per char in UTF-8 worst case
+    safe_chars = MAX_INPUT_BYTES
     truncated = text[:safe_chars] + "\n" + TRUNCATION_MARKER.format(n=MAX_INPUT_BYTES) + "\n"
     return truncated, True
+
+
+def _jq_select(obj: Any, path: str) -> Any:
+    """Simple jq-style path selector supporting ``.field``, ``.a.b``, ``.arr[0]``."""
+    if not path.startswith("."):
+        return None
+    parts = path[1:].split(".")
+    current = obj
+    for part in parts:
+        if part == "":
+            continue
+        m = re.match(r"^(\w+)\[(-?\d+)\]$", part)
+        if m:
+            key, idx = m.group(1), int(m.group(2))
+            if isinstance(current, dict) and key in current:
+                current = current[key]
+                if isinstance(current, list) and -len(current) <= idx < len(current):
+                    current = current[idx]
+                else:
+                    return None
+            else:
+                return None
+        elif isinstance(current, dict) and part in current:
+            current = current[part]
+        else:
+            return None
+    return current
+
+
+def _apply_json_select(lines: list[str], rules: list[FilterRule]) -> list[str] | None:
+    """Apply json_select rules to the full output. Returns new lines or None if not JSON."""
+    json_rules = [r for r in rules if r.type == "json_select"]
+    if not json_rules:
+        return None
+    try:
+        obj = json.loads("\n".join(lines))
+    except (json.JSONDecodeError, ValueError):
+        return None
+    result: list[str] = []
+    for r in json_rules:
+        for fpath in r.fields:
+            value = _jq_select(obj, fpath)
+            if value is None:
+                continue
+            if isinstance(value, (dict, list)):
+                result.append(f"{fpath}: {json.dumps(value, indent=2)}")
+            else:
+                result.append(f"{fpath}: {value}")
+    return result if result else None
 
 
 def _apply_rules(lines: list[str], rules: list[FilterRule]) -> list[str]:
@@ -349,12 +498,18 @@ def _apply_rules(lines: list[str], rules: list[FilterRule]) -> list[str]:
     priority keep rule overrides any drop rule, and a higher priority drop rule
     wins over a default-keep. Phases run in this fixed order:
 
-    1. ``head`` / ``tail`` — input slicing
-    2. ``regex_replace`` — content substitution
-    3. ``keep_section`` — region selection (start..end pattern)
-    4. ``prefix_collapse`` — coalesce consecutive lines with a common prefix
-    5. ``keep_matching`` / ``drop_matching`` — line-level filter (priority-aware)
+    1. ``json_select`` — structured JSON field extraction (skips remaining phases if matched)
+    2. ``head`` / ``tail`` — input slicing
+    3. ``regex_replace`` — content substitution
+    4. ``keep_section`` — region selection (start..end pattern)
+    5. ``prefix_collapse`` — coalesce consecutive lines with a common prefix
+    6. ``keep_matching`` / ``drop_matching`` — line-level filter (priority-aware)
     """
+    # Phase 1: JSON-aware extraction (replaces all line-level processing if matched)
+    json_result = _apply_json_select(lines, rules)
+    if json_result is not None:
+        return json_result
+
     keep_rules = sorted(
         [r for r in rules if r.type == "keep_matching"],
         key=lambda r: -r.priority,
@@ -461,7 +616,10 @@ def _find_override(flt: CommandFilter, command: str) -> list[FilterRule] | None:
 
 
 def _adaptive_truncate(lines: list[str], max_tokens: int) -> tuple[list[str], bool]:
-    """Tail-truncate ``lines`` so total approximate tokens ≤ ``max_tokens``.
+    """Tail-keep ``lines`` so total approximate tokens ≤ ``max_tokens``.
+
+    Keeps the LAST lines — for CLI tools, errors and important output appear at
+    the end, so tail-keeping is semantically correct.
 
     Returns (lines, truncated). Approximation: 1 token ≈ 4 characters.
     """
@@ -471,15 +629,30 @@ def _adaptive_truncate(lines: list[str], max_tokens: int) -> tuple[list[str], bo
     total = sum(len(ln) + 1 for ln in lines)
     if total <= budget_chars:
         return lines, False
+    # Accumulate from the end
     out: list[str] = []
     used = 0
-    for ln in lines:
+    for ln in reversed(lines):
         cost = len(ln) + 1
         if used + cost > budget_chars:
             break
         out.append(ln)
         used += cost
-    return out, True
+    return list(reversed(out)), True
+
+
+def _detect_structured(text: str) -> bool:
+    """Return True if ``text`` looks like valid JSON (object or array)."""
+    stripped = text.strip()
+    if not stripped:
+        return False
+    if not (stripped[0] in ("{", "[") and stripped[-1] in ("}", "]")):
+        return False
+    try:
+        json.loads(stripped)
+        return True
+    except (json.JSONDecodeError, ValueError):
+        return False
 
 
 def compress_output(
@@ -515,9 +688,6 @@ def compress_output(
     """
     t0 = time.monotonic()
     cap = max_input_bytes if max_input_bytes is not None else MAX_INPUT_BYTES
-    # Use char-length as a fast proxy for byte-length (for ASCII they match;
-    # for multi-byte UTF-8 char count is an under-estimate, so the byte cap is
-    # only ever stricter than declared — never looser).
     if cap and len(raw_output) > cap:
         raw_output = raw_output[:cap] + "\n" + TRUNCATION_MARKER.format(n=cap) + "\n"
         truncated = True
@@ -529,7 +699,6 @@ def compress_output(
     raw_lines = clean.splitlines()
     lines = [_truncate_line(ln) for ln in raw_lines]
     original_count = len(lines)
-    original_set: set[int] = set(range(original_count))
 
     flt = _registry.find(command)
     used_strategy: str | None = None
@@ -558,17 +727,20 @@ def compress_output(
         deduped, tt = _adaptive_truncate(deduped, max_tokens)
         if tt:
             truncated = True
-            deduped.append(f"[ctxclp: output trimmed to ≤{max_tokens} tokens]")
+            deduped.insert(0, f"[ctxclp: output tail-trimmed to ≤{max_tokens} tokens; earlier lines omitted]")
 
     compressed = "\n".join(deduped)
+    is_structured = _detect_structured(compressed)
     elapsed = round((time.monotonic() - t0) * 1000, 2)
 
     removed: list[tuple[int, str]] | None = None
+    dropped_errors: list[str] | None = None
     if dry_run:
         kept_set: set[str] = set(deduped)
         removed = [
             (i + 1, ln) for i, ln in enumerate(raw_lines) if ln not in kept_set
         ]
+        dropped_errors = [ln for _, ln in removed if _ERROR_SIGNALS.search(ln)]
 
     return CompressionResult(
         compressed=compressed,
@@ -581,6 +753,9 @@ def compress_output(
         strategy_name=used_strategy,
         bytes_in=bytes_in,
         bytes_out=len(compressed.encode("utf-8", errors="replace")),
+        is_structured=is_structured,
+        filter_name=flt.name if flt else None,
+        dropped_error_lines=dropped_errors,
     )
 
 

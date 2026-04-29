@@ -187,7 +187,7 @@ def build_server() -> Server:
                 indent=2,
             )
         elif name == "get_raw_output":
-            result = tool_get_raw_output(arguments["output_id"])
+            result = tool_get_raw_output(arguments["output_id"], stats_db=stats)
         elif name == "rebuild_graph":
             counts = tool_rebuild_graph(graph, arguments.get("project_root", str(PROJECT_ROOT)))
             result = json.dumps(counts, indent=2)

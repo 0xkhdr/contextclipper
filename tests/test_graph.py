@@ -185,7 +185,7 @@ class OrderController extends UserController {}
         overview = db.get_overview()
         db.close()
         assert "Project Overview" in overview
-        assert "Files indexed:" in overview
+        assert "Files:" in overview
 
     def test_skip_vendor(self, tmp_path: Path) -> None:
         self._write_php(tmp_path, "src/UserController.php")

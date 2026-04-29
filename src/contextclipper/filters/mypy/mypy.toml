@@ -1,0 +1,35 @@
+[filter]
+name = "mypy"
+description = "Compress mypy type-checker output, keeping only type errors and the summary"
+
+[[filter.patterns]]
+match_command = "^(mypy|python -m mypy|uv run mypy|dmypy)"
+
+[[filter.rules]]
+description = "Drop blank lines"
+type = "drop_matching"
+pattern = "^\\s*$"
+
+[[filter.rules]]
+description = "Drop mypy cache info and daemon lines"
+type = "drop_matching"
+pattern = "^(Daemon (started|stopped|restarted)|Starting mypy daemon)"
+
+[[filter.rules]]
+description = "Keep all type error and note lines — each is actionable"
+type = "keep_matching"
+pattern = "^(.*\\.pyi?:\\d+: (error|warning|note)|Found \\d+ error|Success: no issues found)"
+priority = 10
+
+[[filter.rules]]
+description = "Keep the summary line"
+type = "keep_matching"
+pattern = "^(Found \\d+|Success:)"
+priority = 15
+
+[filter.on_failure]
+[[filter.on_failure.rules]]
+description = "On failure, keep all error details including multi-line note context"
+type = "keep_matching"
+pattern = "^(.*\\.pyi?:\\d+:|note:|Found \\d+|Revealed type)"
+priority = 5

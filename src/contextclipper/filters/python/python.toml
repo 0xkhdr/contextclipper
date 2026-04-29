@@ -1,44 +1,94 @@
 [filter]
 name = "python"
-description = "Compress Python tooling output (pytest, ruff, pip)"
+description = "Compress Python tooling output (pytest, ruff, mypy, pip, uv), keeping only failures and actionable information"
 
 [[filter.patterns]]
-match_command = "^(pytest|python -m pytest|ruff|pip\\s+(install|list|show)|uv (add|remove|pip))"
+match_command = "^(pytest|python -m pytest|ruff|mypy|pip\\s+(install|list|show)|uv (add|remove|pip|run pytest|run ruff|run mypy))"
+
+# ── pytest ────────────────────────────────────────────────────────────────────
 
 [[filter.command_overrides]]
-match = "^(pytest|python -m pytest)"
+match = "^(pytest|python -m pytest|uv run pytest)"
 
   [[filter.command_overrides.rules]]
+  description = "Drop pytest platform/config header lines — not actionable"
   type = "drop_matching"
-  pattern = "^(platform |rootdir:|configfile:|plugins:|collected \\d+ item)"
+  pattern = "^(platform |rootdir:|configfile:|plugins:|collected \\d+ item|cacheprovider)"
 
   [[filter.command_overrides.rules]]
-  # Drop passing test lines (dots, spaces)
+  description = "Drop passing test progress dots and blanks"
   type = "drop_matching"
-  pattern = "^\\.+ *$"
+  pattern = "^\\.+ *$|^s+ *$|^\\s*$"
 
   [[filter.command_overrides.rules]]
+  description = "Drop warning summary preamble"
+  type = "drop_matching"
+  pattern = "^warnings summary$|^-+ warnings summary -+$"
+
+  [[filter.command_overrides.rules]]
+  description = "Keep failure markers, error sections, pass/fail summaries, and short test IDs"
   type = "keep_matching"
-  pattern = "^(FAILED|ERROR|PASSED|=====|_____)"
+  pattern = "^(FAILED|ERROR|PASSED|=====|_____| FAILED | PASSED | ERROR |short test summary)"
   priority = 10
+
+[filter.command_overrides.on_failure]
+[[filter.command_overrides.on_failure.rules]]
+description = "On non-zero exit, keep the full failure section"
+type = "keep_section"
+start_pattern = "^=+ FAILURES =+"
+end_pattern = "^=+ (short test summary|warnings summary|\\d+ failed)"
+
+# ── ruff ──────────────────────────────────────────────────────────────────────
 
 [[filter.command_overrides]]
-match = "^ruff"
+match = "^(ruff|uv run ruff)"
 
   [[filter.command_overrides.rules]]
-  # Only show actual violations
+  description = "Keep only violation lines and summary — skip formatting noise"
   type = "keep_matching"
-  pattern = "^(.*\\.py:\\d+:\\d+:|Found \\d+|All checks)"
+  pattern = "^(.*\\.py:\\d+:\\d+:|Found \\d+|All checks passed|error\\[|warning\\[)"
   priority = 10
+
+# ── mypy ──────────────────────────────────────────────────────────────────────
 
 [[filter.command_overrides]]
-match = "^pip install|^uv add"
+match = "^(mypy|uv run mypy)"
 
   [[filter.command_overrides.rules]]
+  description = "Drop mypy progress lines showing file counts"
   type = "drop_matching"
-  pattern = "^Collecting |^  Downloading |^Installing collected|^  Attempting uninstall"
+  pattern = "^(Found \\d+ error|Success: no issues found|Daemon)"
 
   [[filter.command_overrides.rules]]
+  description = "Keep type error lines and summary"
   type = "keep_matching"
-  pattern = "^(Successfully installed|ERROR:|WARNING:|Requirement already)"
+  pattern = "^(.*\\.py:\\d+:|Found \\d+ error|Success:|error:|note:)"
   priority = 10
+
+# ── pip / uv install ──────────────────────────────────────────────────────────
+
+[[filter.command_overrides]]
+match = "^(pip install|pip download|uv add|uv pip install)"
+
+  [[filter.command_overrides.rules]]
+  description = "Drop per-package download/collection progress lines"
+  type = "drop_matching"
+  pattern = "^(Collecting |  Downloading |  Using cached |Installing collected|  Attempting uninstall|  Found existing|Preparing metadata)"
+
+  [[filter.command_overrides.rules]]
+  description = "Drop blank lines"
+  type = "drop_matching"
+  pattern = "^\\s*$"
+
+  [[filter.command_overrides.rules]]
+  description = "Keep success/error/warning lines and the final installed packages list"
+  type = "keep_matching"
+  pattern = "^(Successfully installed|Successfully built|ERROR:|WARNING:|Requirement already|error:|warning:)"
+  priority = 10
+
+[filter.on_failure]
+[[filter.on_failure.rules]]
+description = "On failure, always keep error and exception lines for diagnosis"
+type = "keep_matching"
+pattern = "^(ERROR|Error|FAILED|Traceback|  File |\\w+Error:|\\w+Exception:)"
+priority = 5

@@ -6,7 +6,6 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-# Engine imports (resolved at runtime so the MCP server can be started standalone)
 from contextclipper.engine.filters import compress_output  # type: ignore[import-not-found]
 from contextclipper.engine.graph import GraphDB  # type: ignore[import-not-found]
 from contextclipper.engine.stats import StatsDB  # type: ignore[import-not-found]
@@ -61,10 +60,10 @@ def tool_run_shell(
     """Execute a shell command and return compressed output.
 
     ``compression_level``:
-      - ``"none"``  — return raw output, no filter applied
-      - ``"minimal"`` — only strip ANSI / blank lines (no rules)
-      - ``"auto"`` (default) — full TOML rule engine
-      - ``"aggressive"`` — auto + tail-truncate to ~2k tokens unless ``max_tokens`` set
+      - ``"none"``       — return raw output, no filter applied
+      - ``"minimal"``   — only strip ANSI / blank lines (no rules)
+      - ``"auto"``      (default) — full TOML rule engine
+      - ``"aggressive"`` — auto + tail-keep to ~2 k tokens unless ``max_tokens`` set
     """
     try:
         result = subprocess.run(
@@ -80,9 +79,7 @@ def tool_run_shell(
         return {"error": e.__class__.__name__ + ": " + str(e), "exit_code": -1}
 
     combined = result.stdout + ("\n" + result.stderr if result.stderr else "")
-    raw_id = None
-    if result.returncode != 0:
-        raw_id = save_raw(command, combined, result.returncode)
+    raw_id = save_raw(command, combined, result.returncode)
 
     if compression_level == "none":
         return {
@@ -111,6 +108,8 @@ def tool_run_shell(
             bytes_in=cr.bytes_in,
             bytes_out=cr.bytes_out,
             elapsed_ms=cr.elapsed_ms,
+            filter_name=cr.filter_name,
+            strategy_name=cr.strategy_name,
         )
 
     return {
@@ -124,12 +123,26 @@ def tool_run_shell(
         "elapsed_ms": cr.elapsed_ms,
         "raw_output_id": raw_id,
         "truncated": cr.truncated,
+        "filter_name": cr.filter_name,
+        "metadata": cr.metadata_footer(),
     }
 
 
-def tool_get_raw_output(output_id: str) -> str:
+def tool_get_raw_output(output_id: str, stats_db: StatsDB | None = None) -> str:
+    """Retrieve full raw output and record the fetch in the stats DB.
+
+    When an agent fetches the full output after receiving compressed output,
+    this is tracked so filter quality can be improved over time.
+    """
     raw = get_raw(output_id)
-    return raw if raw is not None else f"Output ID `{output_id}` not found or expired (24h TTL)."
+    if raw is None:
+        return f"Output ID `{output_id}` not found or expired (24h TTL)."
+    if stats_db:
+        try:
+            stats_db.record_raw_pull(output_id)
+        except Exception:
+            pass
+    return raw
 
 
 def tool_get_overview(graph: GraphDB, detail: str = "compact") -> str:

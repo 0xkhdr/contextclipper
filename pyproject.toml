@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "contextclipper"
-version = "0.2.0"
+version = "0.3.0"
 description = "Universal token optimizer for AI coding agents — transparent shell compression + code-graph index"
 readme = "README.md"
 license = { text = "MIT" }
@@ -19,10 +19,14 @@ dependencies = [
     "rich>=13.0.0",
 ]
 
-[project.scripts]
-ctxclp = "contextclipper.cli.main:cli"
-
 [project.optional-dependencies]
+# Language-specific parsers (install the ones you need)
+python-graph = ["tree-sitter-python>=0.23.0"]
+typescript-graph = ["tree-sitter-typescript>=0.23.0"]
+all-languages = [
+    "tree-sitter-python>=0.23.0",
+    "tree-sitter-typescript>=0.23.0",
+]
 dev = [
     "pytest>=8.0.0",
     "pytest-benchmark>=4.0.0",
@@ -30,7 +34,12 @@ dev = [
     "pytest-asyncio>=0.23.0",
     "ruff>=0.4.0",
     "mypy>=1.10.0",
+    "tree-sitter-python>=0.23.0",
+    "tree-sitter-typescript>=0.23.0",
 ]
+
+[project.scripts]
+ctxclp = "contextclipper.cli.main:cli"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/contextclipper"]

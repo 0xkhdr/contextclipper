@@ -26,25 +26,43 @@ SCHEMA = """
 PRAGMA journal_mode=WAL;
 
 CREATE TABLE IF NOT EXISTS events (
-    id           INTEGER PRIMARY KEY,
-    ts           REAL    NOT NULL,
-    command      TEXT    NOT NULL,
+    id             INTEGER PRIMARY KEY,
+    ts             REAL    NOT NULL,
+    command        TEXT    NOT NULL,
     original_lines INTEGER NOT NULL,
-    kept_lines   INTEGER NOT NULL,
-    bytes_in     INTEGER NOT NULL DEFAULT 0,
-    bytes_out    INTEGER NOT NULL DEFAULT 0,
-    elapsed_ms   REAL    NOT NULL DEFAULT 0.0,
-    exit_code    INTEGER NOT NULL DEFAULT 0,
-    had_raw_pull INTEGER NOT NULL DEFAULT 0
+    kept_lines     INTEGER NOT NULL,
+    bytes_in       INTEGER NOT NULL DEFAULT 0,
+    bytes_out      INTEGER NOT NULL DEFAULT 0,
+    elapsed_ms     REAL    NOT NULL DEFAULT 0.0,
+    exit_code      INTEGER NOT NULL DEFAULT 0,
+    had_raw_pull   INTEGER NOT NULL DEFAULT 0,
+    filter_name    TEXT,
+    strategy_name  TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts);
+CREATE TABLE IF NOT EXISTS raw_pulls (
+    id         INTEGER PRIMARY KEY,
+    ts         REAL    NOT NULL,
+    output_id  TEXT    NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_events_ts       ON events(ts);
+CREATE INDEX IF NOT EXISTS idx_raw_pulls_ts    ON raw_pulls(ts);
+CREATE INDEX IF NOT EXISTS idx_raw_pulls_oid   ON raw_pulls(output_id);
 """
 
 _MIGRATIONS = [
     "ALTER TABLE events ADD COLUMN bytes_in INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE events ADD COLUMN bytes_out INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE events ADD COLUMN elapsed_ms REAL NOT NULL DEFAULT 0.0",
+    "ALTER TABLE events ADD COLUMN filter_name TEXT",
+    "ALTER TABLE events ADD COLUMN strategy_name TEXT",
+    (
+        "CREATE TABLE IF NOT EXISTS raw_pulls ("
+        "id INTEGER PRIMARY KEY, ts REAL NOT NULL, output_id TEXT NOT NULL)"
+    ),
+    "CREATE INDEX IF NOT EXISTS idx_raw_pulls_ts  ON raw_pulls(ts)",
+    "CREATE INDEX IF NOT EXISTS idx_raw_pulls_oid ON raw_pulls(output_id)",
 ]
 
 
@@ -66,7 +84,7 @@ class StatsDB:
             try:
                 self._conn.execute(stmt)
             except sqlite3.OperationalError:
-                pass  # column already exists
+                pass  # column / table already exists
         self._conn.commit()
 
     def record(
@@ -79,6 +97,8 @@ class StatsDB:
         bytes_in: int = 0,
         bytes_out: int = 0,
         elapsed_ms: float = 0.0,
+        filter_name: str | None = None,
+        strategy_name: str | None = None,
     ) -> None:
         if self.disabled or self._conn is None:
             return
@@ -86,11 +106,24 @@ class StatsDB:
         with self._lock:
             self._conn.execute(
                 "INSERT INTO events(ts, command, original_lines, kept_lines, bytes_in, bytes_out, "
-                "elapsed_ms, exit_code, had_raw_pull) VALUES(?,?,?,?,?,?,?,?,?)",
+                "elapsed_ms, exit_code, had_raw_pull, filter_name, strategy_name) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 (
                     time.time(), cmd, original_lines, kept_lines,
                     bytes_in, bytes_out, elapsed_ms, exit_code, int(had_raw_pull),
+                    filter_name, strategy_name,
                 ),
+            )
+            self._conn.commit()
+
+    def record_raw_pull(self, output_id: str) -> None:
+        """Record that a raw output was fetched from the tee store."""
+        if self.disabled or self._conn is None:
+            return
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO raw_pulls(ts, output_id) VALUES(?,?)",
+                (time.time(), output_id),
             )
             self._conn.commit()
 
@@ -104,6 +137,7 @@ class StatsDB:
                 "reduction_pct": 0.0,
                 "bytes_saved": 0,
                 "avg_elapsed_ms": 0.0,
+                "raw_pull_count": 0,
                 "top_commands": [],
             }
         since = time.time() - days * 86400
@@ -122,11 +156,19 @@ class StatsDB:
             total_bout = total_bout or 0
             avg_ms = avg_ms or 0.0
             reduction = round((1 - total_kept / total_orig) * 100, 1) if total_orig else 0.0
+
             cur2 = self._conn.execute(
-                "SELECT command, COUNT(*) as n FROM events WHERE ts > ? GROUP BY command ORDER BY n DESC LIMIT 10",
+                "SELECT command, COUNT(*) as n FROM events WHERE ts > ? "
+                "GROUP BY command ORDER BY n DESC LIMIT 10",
                 (since,),
             )
             top_cmds = [{"command": r[0], "count": r[1]} for r in cur2.fetchall()]
+
+            cur3 = self._conn.execute(
+                "SELECT COUNT(*) FROM raw_pulls WHERE ts > ?", (since,)
+            )
+            raw_pull_count = cur3.fetchone()[0] or 0
+
         return {
             "period_days": days,
             "total_commands": total_cmds or 0,
@@ -137,8 +179,58 @@ class StatsDB:
             "bytes_out": total_bout,
             "bytes_saved": max(0, total_bin - total_bout),
             "avg_elapsed_ms": round(avg_ms, 2),
+            "raw_pull_count": raw_pull_count,
             "top_commands": top_cmds,
         }
+
+    def audit(self, days: int = 7, limit: int = 100, command_filter: str | None = None) -> list[dict]:
+        """Return detailed per-event records for auditing what was clipped.
+
+        Each record includes timestamp, command, line counts, reduction %, filter
+        used, and whether the full output was later retrieved.
+        """
+        if self.disabled or self._conn is None:
+            return []
+        since = time.time() - days * 86400
+        with self._lock:
+            if command_filter:
+                cur = self._conn.execute(
+                    "SELECT ts, command, original_lines, kept_lines, bytes_in, bytes_out, "
+                    "elapsed_ms, exit_code, had_raw_pull, filter_name, strategy_name "
+                    "FROM events WHERE ts > ? AND command LIKE ? "
+                    "ORDER BY ts DESC LIMIT ?",
+                    (since, f"%{command_filter}%", limit),
+                )
+            else:
+                cur = self._conn.execute(
+                    "SELECT ts, command, original_lines, kept_lines, bytes_in, bytes_out, "
+                    "elapsed_ms, exit_code, had_raw_pull, filter_name, strategy_name "
+                    "FROM events WHERE ts > ? ORDER BY ts DESC LIMIT ?",
+                    (since, limit),
+                )
+            rows = cur.fetchall()
+
+        results = []
+        for row in rows:
+            ts, cmd, orig, kept, bin_, bout, ms, ec, hrp, fn, sn = row
+            orig = orig or 0
+            kept = kept or 0
+            reduction = round((1 - kept / orig) * 100, 1) if orig else 0.0
+            results.append({
+                "timestamp": ts,
+                "command": cmd,
+                "original_lines": orig,
+                "kept_lines": kept,
+                "reduction_pct": reduction,
+                "bytes_in": bin_ or 0,
+                "bytes_out": bout or 0,
+                "elapsed_ms": ms or 0.0,
+                "exit_code": ec or 0,
+                "had_raw_pull": bool(hrp),
+                "filter_name": fn,
+                "strategy_name": sn,
+            })
+        return results
 
     def close(self) -> None:
         if self._conn is not None:
